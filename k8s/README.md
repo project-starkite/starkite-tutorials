@@ -47,6 +47,12 @@ This directory contains standalone Starlark tutorials demonstrating the 3-tier a
 | [`10-crd-operator.star`](./10-crd-operator.star) | Tier 3 | Custom Resource Definition (CRD) Operator | `k8s.obj.crd()`, functional child return (`[child_dep, child_svc]`), `finalize()`, auto-ownerRef, orphan pruning, `Ready` condition |
 | [`11-cluster-auditor.star`](./11-cluster-auditor.star) | Tool | Cluster Policy & Compliance Auditor | Multi-namespace inspection, SPOF detection, security contexts, scoring |
 
+### Platform Engineering & Multi-Protocol Orchestration
+
+| Script | Tier | Topic | Key APIs |
+|---|---|---|---|
+| [`12-multi-protocol-onboarding.star`](./12-multi-protocol-onboarding.star) | Platform | Multi-Protocol Tenant Onboarding & Last-Mile Delivery | `sql.open()`, `db.tx()`, `defer()`, `k8s.obj.*`, `k8s.apply()`, `k8s.yaml()` |
+
 ---
 
 ## Running the Tutorials
@@ -286,3 +292,28 @@ kite run ./11-cluster-auditor.star --allow-all
 # Audit a single namespace:
 kite run ./11-cluster-auditor.star --var namespace=default --allow-all
 ```
+
+---
+
+### 12. Multi-Protocol Platform Onboarding & Last-Mile Delivery (`12-multi-protocol-onboarding.star`)
+
+Demonstrates how Starkite solves the "last-mile" operational gap in cloud-native Internal Developer Platforms (IDPs). While tools like Crossplane and Terraform provision base cloud infrastructure (e.g., managed databases or clusters), they cannot perform relational schema migrations, seed initial records, or bind credentials to application workloads in a single atomic workflow:
+- **Multi-Protocol Execution**: Direct interaction with a relational database (`sql` module) and the Kubernetes API (`k8s` module) in a single script.
+- **Atomic Reliability**: Uses `db.tx()` to ensure database migrations roll back cleanly on failure, preventing half-applied partial states.
+- **Deterministic Teardown**: Uses `defer(lambda: db.close())` to guarantee database connection pools and file handles close cleanly on exit or termination signal.
+- **Dual-Mode Delivery**: Generates multi-document Kubernetes YAML to stdout for GitOps/piping, or applies directly to an active cluster using Server-Side Apply (`k8s.apply`).
+
+```bash
+# Default run (Manifest mode with SQLite in-memory):
+kite run ./12-multi-protocol-onboarding.star
+
+# Customize tenant and service tier:
+kite run ./12-multi-protocol-onboarding.star --var tenant=globex --var tier=enterprise
+
+# Pipe manifests directly to kubectl:
+kite run ./12-multi-protocol-onboarding.star --var tenant=initech | kubectl apply -f -
+
+# Direct cluster apply (Server-Side Apply against active cluster):
+kite run ./12-multi-protocol-onboarding.star --var mode=apply
+```
+
