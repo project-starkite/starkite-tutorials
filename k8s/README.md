@@ -49,9 +49,11 @@ This directory contains standalone Starlark tutorials demonstrating the 3-tier a
 
 ### Platform Engineering & Multi-Protocol Orchestration
 
-| Script | Tier | Topic | Key APIs |
+| Script / Directory | Tier | Topic | Key APIs |
 |---|---|---|---|
 | [`12-multi-protocol-onboarding.star`](./12-multi-protocol-onboarding.star) | Platform | Multi-Protocol Tenant Onboarding & Last-Mile Delivery | `sql.open()`, `db.tx()`, `defer()`, `k8s.obj.*`, `k8s.apply()`, `k8s.yaml()` |
+| [`kubeadm-bootstrap/`](./kubeadm-bootstrap/) | Infra | Local Machine Provisioning & Kubeadm Setup (Lima / Podman) | `os.sh()`, `concur.map()`, `limactl`, `podman`, `apt-get` |
+| [`k3s-bootstrap/`](./k3s-bootstrap/) | Infra | Multi-Node k3s Cluster Provisioning over SSH | `ssh.config()`, jump host proxying, token extraction |
 
 ---
 
@@ -316,4 +318,31 @@ kite run ./12-multi-protocol-onboarding.star --var tenant=initech | kubectl appl
 # Direct cluster apply (Server-Side Apply against active cluster):
 kite run ./12-multi-protocol-onboarding.star --var mode=apply
 ```
+
+---
+
+### 13. Upstream Kubeadm Local Machine Setup (`kubeadm-bootstrap/`)
+
+Automates the local infrastructure and OS preparation required before running `kubeadm init` or `kubeadm join`:
+- **Configurable Machine Drivers**: Supports starting either Lima Linux VMs (macOS native) or Podman privileged systemd containers.
+- **Kernel & Networking Prerequisites**: Disables swap, loads `overlay` and `br_netfilter` kernel modules, and configures sysctl IP forwarding.
+- **Containerd Setup**: Installs containerd and configures `SystemdCgroup = true`.
+- **Kubeadm Tooling Installation**: Configures official `pkgs.k8s.io` repository, installs `kubelet`, `kubeadm`, and `kubectl` at the requested version, and holds package updates.
+
+```bash
+cd kubeadm-bootstrap/
+
+# Start machines and install kubeadm via Lima VMs (default):
+kite run ./setup.star --var driver=lima
+
+# Start machines and install kubeadm via Podman containers:
+kite run ./setup.star --var driver=podman
+
+# Check status across all provisioned nodes:
+kite run ./setup.star --var action=status --var driver=lima
+
+# Teardown and clean up all machines:
+kite run ./setup.star --var action=destroy --var driver=lima
+```
+
 
