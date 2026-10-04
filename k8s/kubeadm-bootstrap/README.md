@@ -1,38 +1,28 @@
-# Kubeadm Cluster Bootstrap & Local Machine Setup
+# Upstream Kubernetes (Kubeadm) Bootstrapping & Day-2 Management
 
-This directory provides scripts to provision local machines and prepare them for upstream Kubernetes (`kubeadm`) bootstrapping without requiring a Kubernetes management cluster.
-
-## Architecture
-
-The setup prepares a standard multi-node Kubernetes cluster topology:
-* **Control Plane Node** (`k8s-cp`): Runs the Kubernetes API server, controller-manager, scheduler, and etcd.
-* **Worker Nodes** (`k8s-worker-1`, `k8s-worker-2`): Run workloads and join the control plane.
-
-The `setup.star` script supports two local virtualization drivers:
-1. **Lima VMs (`driver=lima`)**: Native QEMU/Virtualization.framework Linux VMs on macOS with independent IPs and systemd.
-2. **Podman Containers (`driver=podman`)**: Systemd-enabled privileged containers running on a dedicated bridge network (`k8s-cluster`).
+This tutorial demonstrates how **Starkite** bootstraps and manages an upstream Kubernetes cluster from scratch using standard `kubeadm`—**without requiring a Kubernetes management cluster, Cluster API (CAPI), or temporary local bootstrap clusters**.
 
 ---
 
-## What `setup.star` Automates
+## The Architecture & The "Root Cluster" Problem
 
-For each configured node, `setup.star` executes:
-1. **Machine Lifecycle**: Creates and starts the VM or container if not already running.
-2. **OS & Kernel Preparation**:
-   - Disables Linux swap (`swapoff -a`).
-   - Loads `overlay` and `br_netfilter` kernel modules.
-   - Configures sysctl parameters (`net.bridge.bridge-nf-call-iptables = 1`, `net.ipv4.ip_forward = 1`).
-3. **Container Runtime Setup**:
-   - Installs `containerd`.
-   - Generates default configuration and enables `SystemdCgroup = true`.
-   - Restarts and enables the `containerd` systemd service.
-4. **Kubernetes Tooling Download & Installation**:
-   - Configures the official upstream apt repository (`pkgs.k8s.io`).
-   - Installs `kubeadm`, `kubelet`, and `kubectl` matching the requested version (default: `1.31`).
-   - Holds package versions to prevent unintended upgrades (`apt-mark hold`).
-   - Enables the `kubelet` service.
-5. **Verification**:
-   - Queries `kubeadm version` and `containerd --version` on each node.
+In Kubernetes-native infrastructure tools like Cluster API (CAPI), infrastructure is represented as Custom Resources (`Cluster`, `KubeadmControlPlane`, `MachineDeployment`). Because these resources require an active Kubernetes control plane to reconcile them, operators face the **Root Cluster Dilemma**: *you must already have a running Kubernetes cluster to create a Kubernetes cluster*.
+
+Starkite eliminates this circular dependency by acting as a **zero-dependency orchestration engine**:
+1. Operates from a single static binary (`kite`) with zero cluster footprint.
+2. Directly orchestrates virtual machines (Lima) or systemd containers (Podman).
+3. Prepares host operating systems (kernel modules, sysctl, containerd).
+4. Executes standard upstream `kubeadm init`, extracts join tokens dynamically, and joins worker nodes concurrently (`concur.map`).
+5. Handles full Day-2 operations: dynamic node scaling, graceful cordoning/draining, and in-place rolling version upgrades.
+
+```
+                           Cluster Lifecycle Overview
+                           
+   1. setup.star       ──► Starts machines (Lima / Podman) & installs containerd + kubeadm
+   2. bootstrap.star   ──► Runs `kubeadm init`, joins workers, applies CNI, verifies Ready
+   3. scale.star       ──► Day-2: Dynamically joins worker-3 or drains worker-2
+   4. upgrade.star     ──► Day-2: Sequential rolling upgrade (CP -> drain -> node upgrade -> uncordon)
+```
 
 ---
 
@@ -40,64 +30,149 @@ For each configured node, `setup.star` executes:
 
 * **Starkite CLI (`kite`)**: Ensure `kite` is in your `PATH` (`kite version`).
 * **Virtualization Driver**:
-  - For Lima: `brew install lima` (`limactl version`).
-  - For Podman: `brew install podman` and an active podman machine (`podman machine start`).
+  - **Lima VMs** (Recommended on macOS): `brew install lima` (`limactl version`).
+  - **Podman Containers**: `brew install podman` and an active podman machine (`podman machine start`).
 
 ---
 
-## Usage
+## Step 1: Provision Machines & Install Kubeadm (`setup.star`)
 
-### 1. Start Machines and Install Kubeadm (Default: Lima)
-
-Provisions the control plane and two worker nodes, then downloads and configures `kubeadm`:
+`setup.star` provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`) and prepares the host operating system:
+* Disables Linux swap.
+* Loads `overlay` and `br_netfilter` kernel modules.
+* Configures sysctl networking (`net.bridge.bridge-nf-call-iptables = 1`, `net.ipv4.ip_forward = 1`).
+* Installs `containerd` with `SystemdCgroup = true`.
+* Configures official upstream `pkgs.k8s.io` repository and installs `kubelet`, `kubeadm`, and `kubectl`.
 
 ```bash
+# Start machines and install kubeadm via Lima VMs (default):
 kite run ./setup.star --var driver=lima
-```
 
-To use Podman containers instead:
-
-```bash
+# Or start machines via Podman containers:
 kite run ./setup.star --var driver=podman
 ```
 
-### 2. Customize Node Names, Version, or Resources
-
-```bash
-kite run ./setup.star \
-  --var driver=lima \
-  --var version=1.31 \
-  --var cp=k8s-master \
-  --var workers=k8s-node-1,k8s-node-2 \
-  --var cpus=2 \
-  --var memory=2
-```
-
-### 3. Check Machine and Kubeadm Status
+Verify that all machines are online and report `kubeadm` installed:
 
 ```bash
 kite run ./setup.star --var action=status --var driver=lima
 ```
 
-### 4. Install Kubeadm on Existing Running Machines
+---
 
-If machines were already started out-of-band and only require package configuration:
+## Step 2: Bootstrap the Upstream Cluster (`bootstrap.star`)
+
+`bootstrap.star` executes the Day-0 and Day-1 initialization sequence:
+1. Discovers the control plane IP.
+2. Executes `kubeadm init --pod-network-cidr=10.244.0.0/16`.
+3. Downloads the cluster `admin.conf` to `./kubeconfig` locally.
+4. Generates the join token and concurrently joins `k8s-worker-1` and `k8s-worker-2` via `concur.map`.
+5. Applies the Flannel CNI network plugin.
+6. Polls node status until all nodes reach `Ready` state.
+7. Deploys a two-replica smoke-test workload to verify scheduling.
 
 ```bash
-kite run ./setup.star --var action=install-kubeadm --var driver=lima
+kite run ./bootstrap.star --var driver=lima
 ```
 
-### 5. Stop Machines
+**Expected Output:**
+```text
+=== Starkite Upstream Kubeadm Bootstrap ===
+Driver         : lima
+Control Plane  : k8s-cp
+Workers        : k8s-worker-1, k8s-worker-2
+CNI Network    : flannel (CIDR: 10.244.0.0/16)
+Kubeconfig Out : ./kubeconfig
 
-Temporarily suspends or stops the instances:
+[1/5] Initializing control plane node k8s-cp...
+  [k8s-cp] Control Plane IP: 192.168.105.10
+  [k8s-cp] Running kubeadm init (pod-network-cidr=10.244.0.0/16)...
+  [k8s-cp SUCCESS] Control plane initialized successfully.
+[2/5] Fetching cluster kubeconfig from k8s-cp...
+  [SUCCESS] Kubeconfig saved to ./kubeconfig
+[3/5] Generating worker join token on k8s-cp...
+  Joining 2 worker nodes concurrently...
+  [k8s-worker-1 SUCCESS] Joined cluster successfully.
+  [k8s-worker-2 SUCCESS] Joined cluster successfully.
+[4/5] Installing Container Network Interface (CNI: flannel)...
+  [SUCCESS] Flannel CNI manifests applied.
+[5/5] Waiting for all 3 nodes to reach Ready state...
+  [SUCCESS] All 3 nodes are in Ready state!
+
+=== Cluster Bootstrap Complete ===
+
+NAME           STATUS   ROLES           AGE     VERSION   INTERNAL-IP
+k8s-cp         Ready    control-plane   2m10s   v1.31.0   192.168.105.10
+k8s-worker-1   Ready    <none>          75s     v1.31.0   192.168.105.11
+k8s-worker-2   Ready    <none>          74s     v1.31.0   192.168.105.12
+```
+
+---
+
+## Step 3: Local Cluster Interaction
+
+To interact with the newly bootstrapped cluster from your workstation:
+
+```bash
+export KUBECONFIG=$(pwd)/kubeconfig
+
+kubectl get nodes -o wide
+kubectl get pods -A
+```
+
+---
+
+## Step 4: Day-2 Dynamic Node Scaling (`scale.star`)
+
+Demonstrates automated worker lifecycle management without manual node intervention.
+
+### Scale Out: Join a New Worker Node
+To provision and join an additional node (`k8s-worker-3`):
+
+```bash
+# 1. Start the machine instance if not already running:
+kite run ./setup.star --var workers=k8s-worker-3 --var driver=lima
+
+# 2. Join the new worker to the live cluster:
+kite run ./scale.star --var action=join --var node=k8s-worker-3 --var driver=lima
+```
+
+### Scale In: Safe Node Decommissioning & Eviction
+To decommission an existing worker node (`k8s-worker-2`):
+1. **Cordons** the node to disable new pod scheduling.
+2. **Gracefully drains** running workloads with eviction timeouts.
+3. **Deletes** the node record from the Kubernetes API.
+4. **Resets** `kubeadm` on the target machine.
+
+```bash
+kite run ./scale.star --var action=drain --var node=k8s-worker-2 --var driver=lima
+```
+
+---
+
+## Step 5: Day-2 Zero-Downtime Rolling Upgrade (`upgrade.star`)
+
+Demonstrates an in-place rolling version upgrade following the official upstream Kubernetes upgrade runbook:
+1. **Control Plane Upgrade**: Upgrades the `kubeadm` package, executes `kubeadm upgrade apply`, and restarts `kubelet`.
+2. **Sequential Worker Node Upgrades**: For each worker, cordons the node, evicts pods via `drain`, upgrades `kubeadm`, runs `kubeadm upgrade node`, restarts `kubelet`, and uncordons.
+3. **Health Verification Gates**: Asserts that each worker returns to `Ready` status before touching the next node.
+
+```bash
+# Upgrade cluster to target version:
+kite run ./upgrade.star --var version=1.31.2 --var driver=lima
+```
+
+---
+
+## Step 6: Teardown & Clean Up
+
+To stop machines without deleting them:
 
 ```bash
 kite run ./setup.star --var action=stop --var driver=lima
 ```
 
-### 6. Teardown & Clean Up
-
-Completely removes and deletes the VMs/containers and network bridges:
+To permanently destroy all instances and network configurations:
 
 ```bash
 kite run ./setup.star --var action=destroy --var driver=lima
@@ -105,15 +180,12 @@ kite run ./setup.star --var action=destroy --var driver=lima
 
 ---
 
-## Next Steps: Cluster Bootstrap
+## Comparison: Cluster API vs. Starkite Standalone
 
-Once `setup.star` reports all nodes are ready with `kubeadm` installed:
-1. Initialize the control plane:
-   ```bash
-   limactl shell k8s-cp sudo kubeadm init --pod-network-cidr=10.244.0.0/16
-   ```
-2. Retrieve the generated join command:
-   ```bash
-   limactl shell k8s-cp sudo kubeadm token create --print-join-command
-   ```
-3. Join the worker nodes using the extracted join command.
+| Lifecycle Dimension | Cluster API (CAPI) | Starkite Bootstrapper |
+|---|---|---|
+| **Prerequisites** | Dedicated management cluster, etcd, 20+ CRDs, 4–6 controller pods | Single static binary (`kite`, ~20MB) |
+| **Day-0 Bootstrap** | Chicken-and-egg: requires local `kind` cluster + complex `clusterctl move` | Direct orchestration over SSH / local hypervisors |
+| **Node Scalability** | Modifies `MachineDeployment` CRDs | Direct programmatic `concur.map` execution |
+| **Bare-Metal Support** | Assumes disposable VMs | Native in-place cordoning, draining, and package upgrades |
+| **Footprint & Speed** | High memory overhead; multi-minute CRD reconciliation loops | Cold start < 15ms; deterministic script execution |
