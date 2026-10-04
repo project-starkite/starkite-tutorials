@@ -23,8 +23,8 @@ args.string(
     "driver",
     shorthand = "d",
     default = "lima",
-    choices = ["lima", "podman"],
-    help = "Virtualization driver: lima (macOS) or podman",
+    choices = ["lima", "multipass"],
+    help = "Virtualization driver: lima (limactl) or multipass",
 )
 
 args.string(

@@ -13,8 +13,8 @@
 #   # 1. Bootstrap cluster on Lima VMs (default):
 #   kite run ./bootstrap.star --driver lima
 #
-#   # 2. Bootstrap cluster on Podman containers:
-#   kite run ./bootstrap.star --driver podman
+#   # 2. Bootstrap cluster on Multipass VMs:
+#   kite run ./bootstrap.star --driver multipass
 #
 #   # 3. Specify custom node names or CNI:
 #   kite run ./bootstrap.star --driver lima --cp k8s-cp --workers k8s-worker-1,k8s-worker-2 --cni flannel
@@ -34,8 +34,8 @@ args.string(
     "driver",
     shorthand = "d",
     default = "lima",
-    choices = ["lima", "podman"],
-    help = "Virtualization driver: lima (macOS) or podman",
+    choices = ["lima", "multipass"],
+    help = "Virtualization driver: lima (limactl) or multipass",
 )
 
 args.string(
@@ -100,7 +100,8 @@ def init_control_plane(driver, cp_node, pod_cidr):
             "kubeadm init " +
             "--apiserver-advertise-address=%s " +
             "--pod-network-cidr=%s " +
-            "--node-name=%s"
+            "--node-name=%s " +
+            "--ignore-preflight-errors=all"
         ) % (cp_ip, pod_cidr, cp_node)
 
         res = exec_node(driver, cp_node, init_cmd)
@@ -148,7 +149,7 @@ def join_worker_node(driver, worker_node, join_cmd):
         return worker_node
 
     printf("  [%s] Joining cluster via kubeadm join...\n", worker_node)
-    cmd = join_cmd + " --node-name=" + worker_node
+    cmd = join_cmd + " --node-name=" + worker_node + " --ignore-preflight-errors=all"
     res = exec_node(driver, worker_node, cmd)
     if not res.ok:
         fail("Failed joining worker node %s: %s" % (worker_node, res.stderr))

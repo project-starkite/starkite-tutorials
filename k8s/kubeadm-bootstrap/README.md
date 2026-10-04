@@ -10,7 +10,7 @@ In Kubernetes-native infrastructure tools like Cluster API (CAPI), infrastructur
 
 Starkite eliminates this circular dependency by acting as a **zero-dependency orchestration engine**:
 1. Operates from a single static binary (`kite`) with zero cluster footprint.
-2. Directly orchestrates virtual machines (Lima) or systemd containers (Podman).
+2. Directly orchestrates virtual machines (**Lima VMs** or **Multipass VMs**) via declarative YAML specifications.
 3. Prepares host operating systems (kernel modules, sysctl, containerd).
 4. Executes standard upstream `kubeadm init`, extracts join tokens dynamically, and joins worker nodes concurrently (`concur.map`).
 5. Handles full Day-2 operations: dynamic node scaling, graceful cordoning/draining, and in-place rolling version upgrades.
@@ -18,7 +18,7 @@ Starkite eliminates this circular dependency by acting as a **zero-dependency or
 ```
                            Cluster Lifecycle Overview
                            
-   1. setup.star       ──► Starts machines (Lima / Podman) & installs containerd + kubeadm
+   1. setup.star       ──► Generates YAML & starts VMs (Lima / Multipass) + installs kubeadm
    2. bootstrap.star   ──► Runs `kubeadm init`, joins workers, applies CNI, verifies Ready
    3. scale.star       ──► Day-2: Dynamically joins worker-3 or drains worker-2
    4. upgrade.star     ──► Day-2: Sequential rolling upgrade (CP -> drain -> node upgrade -> uncordon)
@@ -31,13 +31,13 @@ Starkite eliminates this circular dependency by acting as a **zero-dependency or
 * **Starkite CLI (`kite`)**: Ensure `kite` is in your `PATH` (`kite version`).
 * **Virtualization Driver**:
   - **Lima VMs** (Recommended on macOS): `brew install lima` (`limactl version`).
-  - **Podman Containers**: `brew install podman` and an active podman machine (`podman machine start`).
+  - **Multipass VMs**: `brew install --cask multipass` (`multipass version`).
 
 ---
 
 ## Step 1: Provision Machines & Install Kubeadm (`setup.star`)
 
-`setup.star` provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`) and prepares the host operating system:
+`setup.star` generates machine specification YAMLs (`manifests/lima-*.yaml` or `manifests/multipass-*.yaml`), provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`), and prepares the host operating system:
 * Disables Linux swap.
 * Loads `overlay` and `br_netfilter` kernel modules.
 * Configures sysctl networking (`net.bridge.bridge-nf-call-iptables = 1`, `net.ipv4.ip_forward = 1`).
@@ -48,8 +48,8 @@ Starkite eliminates this circular dependency by acting as a **zero-dependency or
 # Start machines and install kubeadm via Lima VMs (default):
 kite run ./setup.star --driver lima
 
-# Or start machines via Podman containers:
-kite run ./setup.star --driver podman
+# Or start machines via Multipass VMs:
+kite run ./setup.star --driver multipass
 ```
 
 Verify that all machines are online and report `kubeadm` installed:

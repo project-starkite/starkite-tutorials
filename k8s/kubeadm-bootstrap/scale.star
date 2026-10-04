@@ -26,8 +26,8 @@ args.string(
     "driver",
     shorthand = "d",
     default = "lima",
-    choices = ["lima", "podman"],
-    help = "Virtualization driver: lima (macOS) or podman",
+    choices = ["lima", "multipass"],
+    help = "Virtualization driver: lima (limactl) or multipass",
 )
 
 args.string(
@@ -70,7 +70,7 @@ def scale_out(driver, cp_node, worker_node):
 
     # 3. Join the node
     printf("[3/3] Joining %s to cluster...\n", worker_node)
-    res = exec_node(driver, worker_node, join_cmd + " --node-name=" + worker_node)
+    res = exec_node(driver, worker_node, join_cmd + " --node-name=" + worker_node + " --ignore-preflight-errors=all")
     if not res.ok:
         fail("Failed joining node %s: %s" % (worker_node, res.stderr))
 
