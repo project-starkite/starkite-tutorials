@@ -46,16 +46,16 @@ Starkite eliminates this circular dependency by acting as a **zero-dependency or
 
 ```bash
 # Start machines and install kubeadm via Lima VMs (default):
-kite run ./setup.star --var driver=lima
+kite run ./setup.star --driver lima
 
 # Or start machines via Podman containers:
-kite run ./setup.star --var driver=podman
+kite run ./setup.star --driver podman
 ```
 
 Verify that all machines are online and report `kubeadm` installed:
 
 ```bash
-kite run ./setup.star --var action=status --var driver=lima
+kite run ./setup.star --action status --driver lima
 ```
 
 ---
@@ -72,7 +72,7 @@ kite run ./setup.star --var action=status --var driver=lima
 7. Deploys a two-replica smoke-test workload to verify scheduling.
 
 ```bash
-kite run ./bootstrap.star --var driver=lima
+kite run ./bootstrap.star --driver lima
 ```
 
 **Expected Output:**
@@ -131,10 +131,10 @@ To provision and join an additional node (`k8s-worker-3`):
 
 ```bash
 # 1. Start the machine instance if not already running:
-kite run ./setup.star --var workers=k8s-worker-3 --var driver=lima
+kite run ./setup.star --workers k8s-worker-3 --driver lima
 
 # 2. Join the new worker to the live cluster:
-kite run ./scale.star --var action=join --var node=k8s-worker-3 --var driver=lima
+kite run ./scale.star --action join --node k8s-worker-3 --driver lima
 ```
 
 ### Scale In: Safe Node Decommissioning & Eviction
@@ -145,7 +145,7 @@ To decommission an existing worker node (`k8s-worker-2`):
 4. **Resets** `kubeadm` on the target machine.
 
 ```bash
-kite run ./scale.star --var action=drain --var node=k8s-worker-2 --var driver=lima
+kite run ./scale.star --action drain --node k8s-worker-2 --driver lima
 ```
 
 ---
@@ -159,7 +159,7 @@ Demonstrates an in-place rolling version upgrade following the official upstream
 
 ```bash
 # Upgrade cluster to target version:
-kite run ./upgrade.star --var version=1.31.2 --var driver=lima
+kite run ./upgrade.star --version 1.31.2 --driver lima
 ```
 
 ---
@@ -169,13 +169,13 @@ kite run ./upgrade.star --var version=1.31.2 --var driver=lima
 To stop machines without deleting them:
 
 ```bash
-kite run ./setup.star --var action=stop --var driver=lima
+kite run ./setup.star --action stop --driver lima
 ```
 
 To permanently destroy all instances and network configurations:
 
 ```bash
-kite run ./setup.star --var action=destroy --var driver=lima
+kite run ./setup.star --action destroy --driver lima
 ```
 
 ---

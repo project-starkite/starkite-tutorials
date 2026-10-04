@@ -8,10 +8,45 @@
 #
 # Usage:
 #   # Upgrade cluster to target version:
-#   kite run ./upgrade.star --var version=1.31.2 --var driver=lima
+#   kite run ./upgrade.star --version 1.31.2 --driver lima
 
 load("time", "time")
-load("./common.star", "exec_node", "run_local")
+load("./common.star", "common")
+
+exec_node = common.exec_node
+run_local = common.run_local
+
+# ---------------------------------------------------------------------------
+# CLI Argument Schema
+# ---------------------------------------------------------------------------
+args.string(
+    "driver",
+    shorthand = "d",
+    default = "lima",
+    choices = ["lima", "podman"],
+    help = "Virtualization driver: lima (macOS) or podman",
+)
+
+args.string(
+    "version",
+    shorthand = "v",
+    default = "1.31.2",
+    help = "Target Kubernetes version for upgrade (e.g. 1.31.2)",
+)
+
+args.string(
+    "cp",
+    default = "k8s-cp",
+    help = "Control plane node machine name",
+)
+
+args.list(
+    "workers",
+    shorthand = "w",
+    default = ["k8s-worker-1", "k8s-worker-2"],
+    item_type = "string",
+    help = "Worker node hostnames to upgrade sequentially (comma-separated or repeatable)",
+)
 
 def upgrade_control_plane(driver, cp_node, version):
     """Executes the control plane upgrade sequence."""
@@ -93,11 +128,12 @@ def upgrade_worker_node(driver, cp_node, worker_node, version):
     printf("  [SUCCESS] Worker %s upgraded to v%s and returned to service.\n\n", worker_node, version)
 
 def main():
-    driver = var_str("driver", "lima").lower()
-    target_version = var_str("version", "1.31.2")
-    cp_node = var_str("cp", "k8s-cp")
-    workers_str = var_str("workers", "k8s-worker-1,k8s-worker-2")
-    workers = [w.strip() for w in workers_str.split(",") if w.strip()]
+    opts = args.parse()
+
+    driver = opts.driver.lower()
+    target_version = opts.version
+    cp_node = opts.cp
+    workers = [w.strip() for w in opts.workers if w.strip()]
 
     printf("\n=== Starkite Upstream Rolling Upgrade ===\n")
     printf("Driver         : %s\n", driver)

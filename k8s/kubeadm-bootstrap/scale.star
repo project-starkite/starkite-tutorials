@@ -7,13 +7,49 @@
 #
 # Usage:
 #   # 1. Add / Join a new worker node (k8s-worker-3):
-#   kite run ./scale.star --var action=join --var node=k8s-worker-3 --var driver=lima
+#   kite run ./scale.star --action join --node k8s-worker-3 --driver lima
 #
 #   # 2. Safely drain and remove a worker node:
-#   kite run ./scale.star --var action=drain --var node=k8s-worker-2 --var driver=lima
+#   kite run ./scale.star --action drain --node k8s-worker-2 --driver lima
 
 load("time", "time")
-load("./common.star", "exec_node", "get_node_ip", "run_local")
+load("./common.star", "common")
+
+exec_node = common.exec_node
+get_node_ip = common.get_node_ip
+run_local = common.run_local
+
+# ---------------------------------------------------------------------------
+# CLI Argument Schema
+# ---------------------------------------------------------------------------
+args.string(
+    "driver",
+    shorthand = "d",
+    default = "lima",
+    choices = ["lima", "podman"],
+    help = "Virtualization driver: lima (macOS) or podman",
+)
+
+args.string(
+    "action",
+    shorthand = "a",
+    default = "join",
+    choices = ["join", "drain"],
+    help = "Scaling action to perform: join or drain",
+)
+
+args.string(
+    "cp",
+    default = "k8s-cp",
+    help = "Control plane node machine name",
+)
+
+args.string(
+    "node",
+    shorthand = "n",
+    default = "k8s-worker-2",
+    help = "Target worker node hostname to join or drain",
+)
 
 def scale_out(driver, cp_node, worker_node):
     """Joins a worker node to the existing cluster."""
@@ -23,7 +59,7 @@ def scale_out(driver, cp_node, worker_node):
     printf("[1/3] Checking worker node %s readiness...\n", worker_node)
     check_res = exec_node(driver, worker_node, "kubeadm version -o short 2>/dev/null && systemctl is-active containerd 2>/dev/null")
     if not check_res.ok:
-        fail("Node %s is not prepared. Run ./setup.star --var action=install-kubeadm first." % worker_node)
+        fail("Node %s is not prepared. Run ./setup.star --action install-kubeadm first." % worker_node)
 
     # 2. Generate join token from control plane
     printf("[2/3] Generating join token from control plane %s...\n", cp_node)
@@ -89,10 +125,12 @@ def scale_in(driver, cp_node, worker_node):
     printf("%s\n", nodes_res.stdout)
 
 def main():
-    driver = var_str("driver", "lima").lower()
-    action = var_str("action", "join").lower()
-    cp_node = var_str("cp", "k8s-cp")
-    node = var_str("node", "k8s-worker-2")
+    opts = args.parse()
+
+    driver = opts.driver.lower()
+    action = opts.action.lower()
+    cp_node = opts.cp
+    node = opts.node
 
     if action == "join":
         scale_out(driver, cp_node, node)

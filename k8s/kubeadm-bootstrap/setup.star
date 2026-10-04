@@ -8,24 +8,85 @@
 #
 # Usage:
 #   # 1. Start Lima VMs and install kubeadm (Default for macOS):
-#   kite run ./setup.star --var driver=lima
+#   kite run ./setup.star --driver lima
 #
 #   # 2. Start Podman containers and install kubeadm:
-#   kite run ./setup.star --var driver=podman
+#   kite run ./setup.star --driver podman
 #
 #   # 3. Check cluster node machine status:
-#   kite run ./setup.star --var action=status --var driver=lima
+#   kite run ./setup.star --action status --driver lima
 #
 #   # 4. Install kubeadm on existing running machines without creating new ones:
-#   kite run ./setup.star --var action=install-kubeadm --var driver=lima
+#   kite run ./setup.star --action install-kubeadm --driver lima
 #
 #   # 5. Stop running machines:
-#   kite run ./setup.star --var action=stop --var driver=lima
+#   kite run ./setup.star --action stop --driver lima
 #
 #   # 6. Teardown and delete machines:
-#   kite run ./setup.star --var action=destroy --var driver=lima
+#   kite run ./setup.star --action destroy --driver lima
 
 load("concur", "concur")
+
+# ---------------------------------------------------------------------------
+# CLI Argument Schema
+# ---------------------------------------------------------------------------
+args.string(
+    "driver",
+    shorthand = "d",
+    default = "lima",
+    choices = ["lima", "podman"],
+    help = "Virtualization driver: lima (macOS) or podman",
+)
+
+args.string(
+    "action",
+    shorthand = "a",
+    default = "start",
+    choices = ["start", "install-kubeadm", "status", "stop", "destroy"],
+    help = "Lifecycle action: start, install-kubeadm, status, stop, destroy",
+)
+
+args.string(
+    "version",
+    default = "1.31",
+    help = "Kubernetes upstream package version (e.g. 1.31)",
+)
+
+args.string(
+    "cp",
+    default = "k8s-cp",
+    help = "Control plane node machine name",
+)
+
+args.list(
+    "workers",
+    shorthand = "w",
+    default = ["k8s-worker-1", "k8s-worker-2"],
+    item_type = "string",
+    help = "Worker node hostnames (comma-separated or repeatable)",
+)
+
+args.int(
+    "cpus",
+    default = 2,
+    min = 1,
+    help = "vCPUs per node machine",
+)
+
+args.int(
+    "memory",
+    shorthand = "m",
+    default = 2,
+    min = 1,
+    help = "RAM memory in GB per machine",
+)
+
+args.int(
+    "disk",
+    default = 20,
+    min = 5,
+    help = "Disk size in GB per machine (Lima only)",
+)
 
 def run_local(cmd):
     """Executes a command on the local host shell."""
@@ -197,16 +258,17 @@ def get_node_ip(driver, node):
     return "unknown"
 
 def main():
-    driver = var_str("driver", "lima").lower()
-    action = var_str("action", "start").lower()
-    k8s_ver = var_str("version", "1.31")
-    cp_node = var_str("cp", "k8s-cp")
-    workers_str = var_str("workers", "k8s-worker-1,k8s-worker-2")
-    cpus = var_int("cpus", 2)
-    memory_gb = var_int("memory", 2)
-    disk_gb = var_int("disk", 20)
+    opts = args.parse()
 
-    workers = [w.strip() for w in workers_str.split(",") if w.strip()]
+    driver = opts.driver.lower()
+    action = opts.action.lower()
+    k8s_ver = opts.version
+    cp_node = opts.cp
+    workers = [w.strip() for w in opts.workers if w.strip()]
+    cpus = opts.cpus
+    memory_gb = opts.memory
+    disk_gb = opts.disk
+
     all_nodes = [cp_node] + workers
 
     check_driver_prerequisites(driver)
@@ -238,7 +300,7 @@ def main():
             printf("  • %-14s (%s)  IP: %-15s  Status: Ready for kubeadm\n", node, role, ip)
 
         printf("\nNext step: Run cluster bootstrap:\n")
-        printf("  kite run ./bootstrap.star --var driver=%s --var cp=%s\n\n", driver, cp_node)
+        printf("  kite run ./bootstrap.star --driver %s --cp %s\n\n", driver, cp_node)
 
     elif action == "install-kubeadm":
         print("Installing kubeadm on running instances...")

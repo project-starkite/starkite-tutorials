@@ -11,17 +11,67 @@
 #
 # Usage:
 #   # 1. Bootstrap cluster on Lima VMs (default):
-#   kite run ./bootstrap.star --var driver=lima
+#   kite run ./bootstrap.star --driver lima
 #
 #   # 2. Bootstrap cluster on Podman containers:
-#   kite run ./bootstrap.star --var driver=podman
+#   kite run ./bootstrap.star --driver podman
 #
 #   # 3. Specify custom node names or CNI:
-#   kite run ./bootstrap.star --var driver=lima --var cp=k8s-cp --var workers=k8s-worker-1,k8s-worker-2 --var cni=flannel
+#   kite run ./bootstrap.star --driver lima --cp k8s-cp --workers k8s-worker-1,k8s-worker-2 --cni flannel
 
 load("concur", "concur")
 load("time", "time")
-load("./common.star", "exec_node", "get_node_ip", "run_local")
+load("./common.star", "common")
+
+exec_node = common.exec_node
+get_node_ip = common.get_node_ip
+run_local = common.run_local
+
+# ---------------------------------------------------------------------------
+# CLI Argument Schema
+# ---------------------------------------------------------------------------
+args.string(
+    "driver",
+    shorthand = "d",
+    default = "lima",
+    choices = ["lima", "podman"],
+    help = "Virtualization driver: lima (macOS) or podman",
+)
+
+args.string(
+    "cp",
+    default = "k8s-cp",
+    help = "Control plane node machine name",
+)
+
+args.list(
+    "workers",
+    shorthand = "w",
+    default = ["k8s-worker-1", "k8s-worker-2"],
+    item_type = "string",
+    help = "Worker node hostnames (comma-separated or repeatable)",
+)
+
+args.string(
+    "pod-cidr",
+    flag = "pod-cidr",
+    default = "10.244.0.0/16",
+    help = "Pod network CIDR range",
+)
+
+args.string(
+    "cni",
+    default = "flannel",
+    choices = ["flannel", "calico"],
+    help = "Container Network Interface plugin (flannel or calico)",
+)
+
+args.string(
+    "kubeconfig",
+    shorthand = "k",
+    default = "./kubeconfig",
+    help = "Destination path for generated admin kubeconfig",
+)
 
 def check_node_ready_for_bootstrap(driver, node):
     """Verifies that kubeadm and containerd are installed and running on a node."""
@@ -185,14 +235,15 @@ spec:
     exec_node(driver, cp_node, exec_cmd)
 
 def main():
-    driver = var_str("driver", "lima").lower()
-    cp_node = var_str("cp", "k8s-cp")
-    workers_str = var_str("workers", "k8s-worker-1,k8s-worker-2")
-    pod_cidr = var_str("pod_cidr", "10.244.0.0/16")
-    cni = var_str("cni", "flannel").lower()
-    kubeconfig_out = var_str("kubeconfig", "./kubeconfig")
+    opts = args.parse()
 
-    workers = [w.strip() for w in workers_str.split(",") if w.strip()]
+    driver = opts.driver.lower()
+    cp_node = opts.cp
+    workers = [w.strip() for w in opts.workers if w.strip()]
+    pod_cidr = opts.pod_cidr
+    cni = opts.cni.lower()
+    kubeconfig_out = opts.kubeconfig
+
     all_nodes = [cp_node] + workers
 
     printf("\n=== Starkite Upstream Kubeadm Bootstrap ===\n")
