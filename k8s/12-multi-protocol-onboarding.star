@@ -3,8 +3,8 @@
 #
 # Demonstrates:
 #   - Multi-Protocol Orchestration: Combining relational database migrations (sql) with Kubernetes workloads (k8s)
-#   - The "Last-Mile" Platform Solution: Bridging the gap where Crossplane/Terraform provision cloud resources
-#     (e.g., RDS instances) but cannot run SQL schema migrations or seed initial tenant records
+#   - The "Last-Mile" Platform Solution: Bridging the boundary between database schema initialization
+#     and Kubernetes workload configuration in a single atomic workflow
 #   - Deterministic Lifecycle: defer() ensures database connections and file handles are closed on exit or signal
 #   - Resilient Atomic Transactions: db.tx() rolls back database changes on error, avoiding dirty partial state
 #   - Typed Object Modeling: k8s.obj.* constructors for Namespace, ConfigMap, and Deployment

@@ -297,9 +297,9 @@ kite run ./11-cluster-auditor.star --var namespace=default --allow-all
 
 ### 12. Multi-Protocol Platform Onboarding & Last-Mile Delivery (`12-multi-protocol-onboarding.star`)
 
-Demonstrates how Starkite solves the "last-mile" operational gap in cloud-native Internal Developer Platforms (IDPs). While tools like Crossplane and Terraform provision base cloud infrastructure (e.g., managed databases or clusters), they cannot perform relational schema migrations, seed initial records, or bind credentials to application workloads in a single atomic workflow:
-- **Multi-Protocol Execution**: Direct interaction with a relational database (`sql` module) and the Kubernetes API (`k8s` module) in a single script.
-- **Atomic Reliability**: Uses `db.tx()` to ensure database migrations roll back cleanly on failure, preventing half-applied partial states.
+Demonstrates multi-protocol environment provisioning by unifying relational database schema operations and Kubernetes workload deployment into a single, atomic platform workflow. Traditional infrastructure provisioning tools typically halt at resource creation boundaries—leaving data tier initialization, schema migrations, tenant record seeding, and application configuration binding to disjoint shell scripts or external orchestration pipelines:
+- **Multi-Protocol Execution**: Bridges the data and orchestration layers by directly interacting with relational databases (`sql` module) and the Kubernetes API (`k8s` module) in a single script.
+- **Atomic Reliability**: Uses `db.tx()` to ensure database migrations roll back cleanly on failure, preventing half-applied partial states or orphaned workloads.
 - **Deterministic Teardown**: Uses `defer(lambda: db.close())` to guarantee database connection pools and file handles close cleanly on exit or termination signal.
 - **Dual-Mode Delivery**: Generates multi-document Kubernetes YAML to stdout for GitOps/piping, or applies directly to an active cluster using Server-Side Apply (`k8s.apply`).
 
