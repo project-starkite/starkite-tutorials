@@ -103,11 +103,7 @@ def fetch_and_save_kubeconfig(cp_node, output_path):
     """Retrieves admin.conf from the control plane and saves it locally."""
     printf("[2/5] Fetching cluster kubeconfig from %s...\n", cp_node)
     cp_ip = lima.get_ip(cp_node)
-    conf_res = lima.exec(cp_node, "cat /etc/kubernetes/admin.conf")
-    if not conf_res.ok:
-        fail("Failed retrieving admin.conf from %s: %s" % (cp_node, conf_res.stderr))
-
-    raw_conf = conf_res.stdout
+    raw_conf = lima.read_file(cp_node, "/etc/kubernetes/admin.conf")
     # Host connects via forwarded loopback port 6443
     adapted_conf = raw_conf.replace("https://" + cp_ip + ":6443", "https://127.0.0.1:6443")
 
