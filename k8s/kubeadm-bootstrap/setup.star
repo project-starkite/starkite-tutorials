@@ -114,7 +114,7 @@ def generate_lima_yaml(node, cpus, memory_gb, disk_gb):
     run_local("mkdir -p manifests")
     manifest_path = "manifests/lima-%s.yaml" % node
     manifest_data = {
-        "base": [{"template": "ubuntu-24.04"}],
+        "base": ["template:ubuntu-24.04"],
         "cpus": cpus,
         "memory": "%dGiB" % memory_gb,
         "disk": "%dGiB" % disk_gb,

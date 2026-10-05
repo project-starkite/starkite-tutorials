@@ -20,7 +20,6 @@
 #   kite run ./bootstrap.star --driver lima --cp k8s-cp --workers k8s-worker-1,k8s-worker-2 --cni flannel
 
 load("concur", "concur")
-load("http", "http")
 load("time", "time")
 load("./common.star", "common")
 
@@ -165,14 +164,14 @@ def install_cni(k8s_client, cni_type):
     printf("[4/5] Installing Container Network Interface (CNI: %s)...\n", cni_type)
     if cni_type == "flannel":
         flannel_url = "https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml"
-        resp = http.get(flannel_url)
+        resp = http.url(flannel_url).get()
         if resp.status_code != 200:
             fail("Failed fetching Flannel CNI manifest: HTTP " + str(resp.status_code))
         k8s_client.apply(resp.get_text(), force=True)
         printf("  [SUCCESS] Flannel CNI manifests applied natively.\n")
     elif cni_type == "calico":
         calico_url = "https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml"
-        resp = http.get(calico_url)
+        resp = http.url(calico_url).get()
         if resp.status_code != 200:
             fail("Failed fetching Calico CNI manifest: HTTP " + str(resp.status_code))
         k8s_client.apply(resp.get_text(), force=True)
