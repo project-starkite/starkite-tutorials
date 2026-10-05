@@ -1,0 +1,5 @@
+# Local cluster and runtime artifacts
+kubeconfig
+manifests/
+*.log
+.DS_Store

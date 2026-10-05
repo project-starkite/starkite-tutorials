@@ -76,7 +76,7 @@ def upgrade_control_plane(driver, cp_node, version):
 
     # 4. Verify control plane readiness
     printf("  [4/4] Verifying control plane node status...\n")
-    time.sleep(5)
+    time.sleep("5s")
     ver_res = exec_node(driver, cp_node, "kubectl get node %s" % cp_node)
     printf("%s\n", ver_res.stdout)
 
@@ -120,7 +120,7 @@ def upgrade_worker_node(driver, cp_node, worker_node, version):
         if "Ready" in status_res.stdout and "NotReady" not in status_res.stdout:
             ready = True
             break
-        time.sleep(10)
+        time.sleep("10s")
 
     if not ready:
         fail("Health check failed: Node %s did not return to Ready state." % worker_node)

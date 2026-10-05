@@ -81,7 +81,7 @@ def scale_out(driver, cp_node, worker_node):
         if "Ready" in status_res.stdout and "NotReady" not in status_res.stdout:
             printf("  [SUCCESS] Node %s is Ready!\n", worker_node)
             break
-        time.sleep(10)
+        time.sleep("10s")
 
     # Print updated node table
     print("\nUpdated Cluster Topology:")

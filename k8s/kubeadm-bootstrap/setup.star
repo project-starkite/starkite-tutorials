@@ -120,14 +120,15 @@ cpus: %d
 memory: "%dGiB"
 disk: "%dGiB"
 
+networks:
+  - lima: user-v2
+
 # containerd is installed and managed by Starkite kubeadm setup
 containerd:
   system: false
   user: false
 """ % (node, cpus, memory_gb, disk_gb)
-    f = fs.create(manifest_path)
-    f.write(content)
-    f.close()
+    write_text(manifest_path, content)
     return manifest_path
 
 def generate_multipass_yaml(node):
@@ -158,9 +159,7 @@ runcmd:
   - modprobe br_netfilter || true
   - sysctl --system || true
 """ % (node, node)
-    f = fs.create(manifest_path)
-    f.write(content)
-    f.close()
+    write_text(manifest_path, content)
     return manifest_path
 
 def start_machine(driver, node, cpus, memory_gb, disk_gb):
@@ -243,8 +242,9 @@ EOF
     printf("  [%s] Step 2/5: Installing and configuring containerd runtime...\n", node)
     containerd_script = """
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq >/dev/null
-    apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd >/dev/null
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 2; done
+    apt-get update -qq
+    apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
     mkdir -p /etc/containerd
     containerd config default > /etc/containerd/config.toml
     sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
@@ -253,29 +253,33 @@ EOF
     """
     res = exec_node(driver, node, containerd_script)
     if not res.ok:
-        printf("  [%s] Failed to configure containerd: %s\n", node, res.stderr)
+        err_msg = res.error if res.error else res.stderr
+        printf("  [%s] Failed to configure containerd (exit %d): %s\n", node, res.code, err_msg)
         return False
 
     printf("  [%s] Step 3/5: Configuring Kubernetes apt repository (pkgs.k8s.io v%s)...\n", node, k8s_version)
     repo_script = """
     export DEBIAN_FRONTEND=noninteractive
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 2; done
     mkdir -p -m 755 /etc/apt/keyrings
     curl -fsSL https://pkgs.k8s.io/core:/stable:/v%s/deb/Release.key | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v%s/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
-    apt-get update -qq >/dev/null
+    apt-get update -qq
     """ % (k8s_version, k8s_version)
     exec_node(driver, node, repo_script)
 
     printf("  [%s] Step 4/5: Installing kubeadm, kubelet, and kubectl...\n", node)
     pkg_script = """
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y -qq kubelet kubeadm kubectl >/dev/null
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 2; done
+    apt-get install -y -qq kubelet kubeadm kubectl
     apt-mark hold kubelet kubeadm kubectl >/dev/null
     systemctl enable kubelet >/dev/null 2>&1
     """
     res = exec_node(driver, node, pkg_script)
     if not res.ok:
-        printf("  [%s] Failed installing Kubernetes packages: %s\n", node, res.stderr)
+        err_msg = res.error if res.error else res.stderr
+        printf("  [%s] Failed installing Kubernetes packages (exit %d): %s\n", node, res.code, err_msg)
         return False
 
     printf("  [%s] Step 5/5: Verifying installation...\n", node)

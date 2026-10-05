@@ -22,9 +22,14 @@ def get_node_ip(driver, node):
     if driver == "lima":
         res = run_local("limactl shell %s hostname -I" % node)
         if res.ok:
-            return res.stdout.strip().split(" ")[0]
+            ips = res.stdout.strip().split()
+            for ip in ips:
+                if ip.startswith("192.168.104."):
+                    return ip
+            if len(ips) > 0:
+                return ips[0]
     elif driver == "multipass":
         res = run_local("multipass exec %s -- hostname -I" % node)
         if res.ok:
-            return res.stdout.strip().split(" ")[0]
+            return res.stdout.strip().split()[0]
     return "unknown"

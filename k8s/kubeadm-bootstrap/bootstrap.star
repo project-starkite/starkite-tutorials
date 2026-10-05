@@ -99,19 +99,20 @@ def init_control_plane(driver, cp_node, pod_cidr):
         init_cmd = (
             "kubeadm init " +
             "--apiserver-advertise-address=%s " +
+            "--apiserver-cert-extra-sans=127.0.0.1,localhost,%s " +
             "--pod-network-cidr=%s " +
             "--node-name=%s " +
             "--ignore-preflight-errors=all"
-        ) % (cp_ip, pod_cidr, cp_node)
+        ) % (cp_ip, cp_ip, pod_cidr, cp_node)
 
         res = exec_node(driver, cp_node, init_cmd)
         if not res.ok:
             fail("kubeadm init failed on %s: %s" % (cp_node, res.stderr))
         printf("  [%s SUCCESS] Control plane initialized successfully.\n", cp_node)
 
-    # Configure local root kubeconfig on the control plane node
-    exec_node(driver, cp_node, "mkdir -p /root/.kube && cp -f /etc/kubernetes/admin.conf /root/.kube/config")
-    exec_node(driver, cp_node, "chmod 600 /root/.kube/config")
+    # Configure local root and user kubeconfig on the control plane node
+    exec_node(driver, cp_node, "mkdir -p /root/.kube && cp -f /etc/kubernetes/admin.conf /root/.kube/config && chmod 600 /root/.kube/config")
+    exec_node(driver, cp_node, "for d in /home/*; do if [ -d \"$d\" ]; then mkdir -p \"$d/.kube\" && cp -f /etc/kubernetes/admin.conf \"$d/.kube/config\" && chown -R $(stat -c '%u:%g' \"$d\") \"$d/.kube\" 2>/dev/null || true; fi; done")
 
 def fetch_and_save_kubeconfig(driver, cp_node, output_path):
     """Retrieves admin.conf from the control plane and saves it locally."""
@@ -122,14 +123,14 @@ def fetch_and_save_kubeconfig(driver, cp_node, output_path):
         fail("Failed retrieving admin.conf from %s: %s" % (cp_node, conf_res.stderr))
 
     raw_conf = conf_res.stdout
-    # Point the server endpoint to the control plane IP
-    adapted_conf = raw_conf.replace("127.0.0.1", cp_ip)
+    # Point the server endpoint: for Lima, host connects via forwarded 127.0.0.1; for Multipass, host connects via cp_ip
+    server_host = "127.0.0.1" if driver == "lima" else cp_ip
+    adapted_conf = raw_conf.replace("https://" + cp_ip + ":6443", "https://" + server_host + ":6443")
+    adapted_conf = adapted_conf.replace("https://127.0.0.1:6443", "https://" + server_host + ":6443")
     
     # Save to local file
-    f = fs.create(output_path)
-    f.write(adapted_conf)
-    f.close()
-    printf("  [SUCCESS] Kubeconfig saved to %s (API endpoint: https://%s:6443)\n", output_path, cp_ip)
+    write_text(output_path, adapted_conf)
+    printf("  [SUCCESS] Kubeconfig saved to %s (API endpoint: https://%s:6443)\n", output_path, server_host)
     return adapted_conf
 
 def get_join_command(driver, cp_node):
@@ -195,7 +196,7 @@ def assert_cluster_readiness(driver, cp_node, expected_count):
             break
         
         printf("  Attempt %d/%d: %d/%d nodes Ready. Waiting 10s...\n", attempt + 1, max_retries, ready_count, expected_count)
-        time.sleep(10)
+        time.sleep("10s")
 
     if not ready:
         fail("Timed out waiting for all nodes to reach Ready state.")
