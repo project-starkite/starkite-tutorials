@@ -1,69 +1,47 @@
 #!/usr/bin/env kite --allow-all
-# setup.star - Configurable Local Node Provisioner & Kubeadm Installer
+# setup.star - Provision Lima VMs and install Kubernetes prerequisites
 #
-# Automates the infrastructure layer for Kubernetes cluster bootstrapping:
-# 1. Configurable start of machines: Supports either Lima VMs (macOS) or Multipass VMs
-# 2. Generates declarative machine YAML configurations (Lima template / Multipass cloud-init)
-# 3. Automated download & installation of upstream kubeadm, kubelet, kubectl, and containerd
-# 4. Kernel and OS preparation: Disables swap, loads overlay/br_netfilter, and configures systemd cgroups
+# Generates declarative Lima YAML specifications (with embedded OS & kubeadm provisioning)
+# and manages virtual machine lifecycles for the upstream Kubernetes cluster.
 #
 # Usage:
-#   # 1. Start Lima VMs and install kubeadm (Default for macOS):
-#   kite run ./setup.star --driver lima
+#   # 1. Start all machines and provision kubeadm prerequisites:
+#   kite run ./setup.star
 #
-#   # 2. Start Multipass VMs and install kubeadm:
-#   kite run ./setup.star --driver multipass
+#   # 2. Check cluster machine status:
+#   kite run ./setup.star --action status
 #
-#   # 3. Check cluster node machine status:
-#   kite run ./setup.star --action status --driver lima
+#   # 3. Stop machines:
+#   kite run ./setup.star --action stop
 #
-#   # 4. Install kubeadm on existing running machines without creating new ones:
-#   kite run ./setup.star --action install-kubeadm --driver lima
-#
-#   # 5. Stop running machines:
-#   kite run ./setup.star --action stop --driver lima
-#
-#   # 6. Teardown and delete machines:
-#   kite run ./setup.star --action destroy --driver lima
+#   # 4. Destroy machines and clean up runtime manifests:
+#   kite run ./setup.star --action destroy
 
 load("concur", "concur")
-load("yaml", "yaml")
-load("./common.star", "common")
-
-exec_node = common.exec_node
-get_node_ip = common.get_node_ip
-run_local = common.run_local
-wait_for_package_manager = common.wait_for_package_manager
+load("./lima.star", "lima")
 
 # ---------------------------------------------------------------------------
 # CLI Argument Schema
 # ---------------------------------------------------------------------------
 args.string(
-    "driver",
-    shorthand = "d",
-    default = "lima",
-    choices = ["lima", "multipass"],
-    help = "Virtualization driver: lima (macOS) or multipass",
-)
-
-args.string(
     "action",
     shorthand = "a",
     default = "start",
-    choices = ["start", "install-kubeadm", "status", "stop", "destroy"],
-    help = "Lifecycle action: start, install-kubeadm, status, stop, destroy",
+    choices = ["start", "status", "stop", "destroy"],
+    help = "Lifecycle action: start, status, stop, destroy",
 )
 
 args.string(
     "version",
+    shorthand = "v",
     default = "1.31",
-    help = "Kubernetes upstream package version (e.g. 1.31)",
+    help = "Kubernetes minor version (e.g., 1.31)",
 )
 
 args.string(
     "cp",
     default = "k8s-cp",
-    help = "Control plane node machine name",
+    help = "Control plane machine name",
 )
 
 args.list(
@@ -71,231 +49,51 @@ args.list(
     shorthand = "w",
     default = ["k8s-worker-1", "k8s-worker-2"],
     item_type = "string",
-    help = "Worker node hostnames (comma-separated or repeatable)",
+    help = "Worker machine hostnames",
 )
 
 args.int(
     "cpus",
     default = 2,
-    min = 1,
-    help = "vCPUs per node machine",
+    help = "Virtual CPUs allocated per node",
 )
 
 args.int(
     "memory",
-    shorthand = "m",
     default = 2,
-    min = 1,
-    help = "RAM memory in GB per machine",
+    help = "RAM in GiB allocated per node",
 )
 
 args.int(
     "disk",
     default = 20,
-    min = 5,
-    help = "Disk size in GB per machine",
+    help = "Disk space in GiB allocated per node",
 )
 
-def check_driver_prerequisites(driver):
-    """Verifies that the required local virtualization CLI is available."""
-    if driver == "lima":
-        res = run_local("which limactl")
-        if not res.ok:
-            fail("limactl not found in PATH. Install with: brew install lima")
-    elif driver == "multipass":
-        res = run_local("which multipass")
-        if not res.ok:
-            fail("multipass not found in PATH. Install with: brew install --cask multipass")
-    else:
-        fail("Driver must be 'lima' or 'multipass', got: " + driver)
+def start_node(node, cpus, memory_gb, disk_gb, k8s_version):
+    """Generates manifest and starts a Lima node with embedded cloud provisioning."""
+    printf("  [%s] Generating machine specification...\n", node)
+    manifest_path = lima.generate_manifest(node, cpus, memory_gb, disk_gb, k8s_version)
+    printf("  [%s] Starting Lima VM (cpus: %d, memory: %dGiB)...\n", node, cpus, memory_gb)
+    ok = lima.start(node, manifest_path)
+    if not ok:
+        fail("Failed starting Lima machine: " + node)
+    return node
 
-def generate_lima_yaml(node, cpus, memory_gb, disk_gb):
-    """Generates a Lima YAML instance definition file using Starkite's yaml module."""
-    run_local("mkdir -p manifests")
-    manifest_path = "manifests/lima-%s.yaml" % node
-    manifest_data = {
-        "base": ["template:ubuntu-24.04"],
-        "cpus": cpus,
-        "memory": "%dGiB" % memory_gb,
-        "disk": "%dGiB" % disk_gb,
-        "networks": [{"lima": "user-v2"}],
-        "containerd": {
-            "system": False,
-            "user": False,
-        },
-    }
-    encoded = yaml.encode(manifest_data)
-    header = "# Lima machine configuration generated by Starkite\n# Node: %s\n" % node
-    write_text(manifest_path, header + encoded)
-    return manifest_path
-
-def generate_multipass_yaml(node):
-    """Generates a cloud-init YAML configuration for Multipass using Starkite's yaml module."""
-    run_local("mkdir -p manifests")
-    manifest_path = "manifests/multipass-%s.yaml" % node
-    cloud_config = {
-        "hostname": node,
-        "manage_etc_hosts": True,
-        "write_files": [
-            {
-                "path": "/etc/modules-load.d/k8s.conf",
-                "content": "overlay\nbr_netfilter\n",
-            },
-            {
-                "path": "/etc/sysctl.d/k8s.conf",
-                "content": "net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n",
-            },
-        ],
-        "runcmd": [
-            "swapoff -a",
-            "sed -i '/swap/d' /etc/fstab || true",
-            "modprobe overlay || true",
-            "modprobe br_netfilter || true",
-            "sysctl --system || true",
-        ],
-    }
-    encoded = yaml.encode(cloud_config)
-    header = "#cloud-config\n# Node: %s\n" % node
-    write_text(manifest_path, header + encoded)
-    return manifest_path
-
-def start_machine(driver, node, cpus, memory_gb, disk_gb):
-    """Ensures a machine instance exists and is running."""
-    printf("  Checking instance %s on %s...\n", node, driver)
-
-    if driver == "lima":
-        # Check existing Lima instances
-        list_res = run_local("limactl list -q")
-        existing_vms = [v.strip() for v in list_res.stdout.split("\n") if v.strip()]
-        
-        if node in existing_vms:
-            status_res = run_local("limactl list --format '{{.Name}}: {{.Status}}'")
-            if node + ": Running" in status_res.stdout:
-                printf("  [%s] Lima VM is already Running.\n", node)
-                return True
-            printf("  [%s] Starting existing stopped Lima VM...\n", node)
-            start_res = run_local("limactl start --tty=false " + node)
-            return start_res.ok
-
-        # Generate YAML manifest and launch instance
-        yaml_path = generate_lima_yaml(node, cpus, memory_gb, disk_gb)
-        printf("  [%s] Generated Lima manifest: %s\n", node, yaml_path)
-        printf("  [%s] Creating and starting Ubuntu Lima VM (cpus: %d, memory: %dG)...\n", node, cpus, memory_gb)
-        create_cmd = "limactl start --name=%s --tty=false %s" % (node, yaml_path)
-        res = run_local(create_cmd)
-        if not res.ok:
-            printf("  Error creating Lima VM %s: %s\n", node, res.stderr)
-            return False
-        return True
-
-    elif driver == "multipass":
-        # Check existing Multipass instances
-        list_res = run_local("multipass list --format csv 2>/dev/null || true")
-        existing_vms = [line.split(",")[0].strip() for line in list_res.stdout.split("\n") if line.strip() and not line.startswith("Name")]
-
-        if node in existing_vms:
-            info_res = run_local("multipass info %s 2>/dev/null || true" % node)
-            if "State:          Running" in info_res.stdout:
-                printf("  [%s] Multipass VM is already Running.\n", node)
-                return True
-            printf("  [%s] Starting existing stopped Multipass VM...\n", node)
-            return run_local("multipass start " + node).ok
-
-        # Generate cloud-init YAML manifest and launch instance
-        yaml_path = generate_multipass_yaml(node)
-        printf("  [%s] Generated Multipass cloud-init manifest: %s\n", node, yaml_path)
-        printf("  [%s] Launching Ubuntu 24.04 Multipass VM (cpus: %d, memory: %dG)...\n", node, cpus, memory_gb)
-        launch_cmd = (
-            "multipass launch --name %s --cpus %d --memory %dG --disk %dG --cloud-init %s 24.04"
-            % (node, cpus, memory_gb, disk_gb, yaml_path)
-        )
-        res = run_local(launch_cmd)
-        if not res.ok:
-            printf("  Error launching Multipass VM %s: %s\n", node, res.stderr)
-            return False
-        return True
-
-def install_kubeadm_node(driver, node, k8s_version):
-    """Downloads and installs containerd, kubelet, kubeadm, and kubectl on a node."""
-    # Synchronize with background cloud-init / package manager activity
-    wait_for_package_manager(driver, node)
-
-    printf("  [%s] Step 1/5: Disabling swap and loading kernel modules (overlay, br_netfilter)...\n", node)
-    kmod_script = """
-    swapoff -a
-    sed -i '/swap/d' /etc/fstab || true
-    cat <<EOF > /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-EOF
-    modprobe overlay || true
-    modprobe br_netfilter || true
-    cat <<EOF > /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-EOF
-    sysctl --system >/dev/null 2>&1 || true
-    """
-    exec_node(driver, node, kmod_script)
-
-    printf("  [%s] Step 2/5: Installing and configuring containerd runtime...\n", node)
-    wait_for_package_manager(driver, node)
-    containerd_script = """
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
-    mkdir -p /etc/containerd
-    containerd config default > /etc/containerd/config.toml
-    sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-    systemctl restart containerd
-    systemctl enable containerd >/dev/null 2>&1
-    """
-    res = exec_node(driver, node, containerd_script)
-    if not res.ok:
-        err_msg = res.error if res.error else res.stderr
-        printf("  [%s] Failed to configure containerd (exit %d): %s\n", node, res.code, err_msg)
-        return False
-
-    printf("  [%s] Step 3/5: Configuring Kubernetes apt repository (pkgs.k8s.io v%s)...\n", node, k8s_version)
-    wait_for_package_manager(driver, node)
-    repo_script = """
-    export DEBIAN_FRONTEND=noninteractive
-    mkdir -p -m 755 /etc/apt/keyrings
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v%s/deb/Release.key | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v%s/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
-    apt-get update -qq
-    """ % (k8s_version, k8s_version)
-    exec_node(driver, node, repo_script)
-
-    printf("  [%s] Step 4/5: Installing kubeadm, kubelet, and kubectl...\n", node)
-    wait_for_package_manager(driver, node)
-    pkg_script = """
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y -qq kubelet kubeadm kubectl
-    apt-mark hold kubelet kubeadm kubectl >/dev/null
-    systemctl enable kubelet >/dev/null 2>&1
-    """
-    res = exec_node(driver, node, pkg_script)
-    if not res.ok:
-        err_msg = res.error if res.error else res.stderr
-        printf("  [%s] Failed installing Kubernetes packages (exit %d): %s\n", node, res.code, err_msg)
-        return False
-
-    printf("  [%s] Step 5/5: Verifying installation...\n", node)
-    ver_res = exec_node(driver, node, "kubeadm version -o short && containerd --version")
+def verify_node(node):
+    """Verifies that kubeadm and containerd were provisioned successfully."""
+    ver_res = lima.exec(node, "kubeadm version -o short && containerd --version")
     if ver_res.ok:
         versions = ver_res.stdout.strip().replace("\n", ", ")
-        printf("  [%s SUCCESS] Installed: %s\n", node, versions)
+        printf("  [%s SUCCESS] Ready: %s\n", node, versions)
         return True
     else:
-        printf("  [%s WARNING] Verification output: %s\n", node, ver_res.stderr)
+        printf("  [%s WARNING] Verification: %s\n", node, ver_res.stderr)
         return False
 
 def main():
     opts = args.parse()
 
-    driver = opts.driver.lower()
     action = opts.action.lower()
     k8s_ver = opts.version
     cp_node = opts.cp
@@ -306,10 +104,10 @@ def main():
 
     all_nodes = [cp_node] + workers
 
-    check_driver_prerequisites(driver)
+    lima.check_prerequisites()
 
     printf("\n=== Starkite Kubeadm Node Setup ===\n")
-    printf("Driver         : %s\n", driver)
+    printf("Driver         : lima\n")
     printf("Action         : %s\n", action)
     printf("K8s Version    : %s\n", k8s_ver)
     printf("Control Plane  : %s\n", cp_node)
@@ -317,60 +115,47 @@ def main():
     printf("Hardware Alloc : %d vCPUs, %d GB RAM per node\n\n", cpus, memory_gb)
 
     if action == "start":
-        print("[Phase 1/2] Starting machine instances from generated YAML specifications...")
+        print("[1/2] Launching and provisioning Lima machines...")
+        # Start nodes sequentially or concurrently (Lima handles individual instance starts)
         for node in all_nodes:
-            ok = start_machine(driver, node, cpus, memory_gb, disk_gb)
-            if not ok:
-                fail("Failed starting machine: " + node)
-        printf("\nAll %d machines are running.\n\n", len(all_nodes))
+            start_node(node, cpus, memory_gb, disk_gb, k8s_ver)
 
-        print("[Phase 2/2] Downloading & installing containerd and kubeadm on all nodes...")
-        # Concurrently install packages on all nodes
-        results = concur.map(all_nodes, lambda n: install_kubeadm_node(driver, n, k8s_ver))
-        
+        printf("\n[2/2] Verifying node readiness and installed packages...\n")
+        concur.map(all_nodes, verify_node)
+
         printf("\n--- Setup Complete Summary ---\n")
         for node in all_nodes:
-            ip = get_node_ip(driver, node)
+            ip = lima.get_ip(node)
             role = "Control Plane" if node == cp_node else "Worker Node"
             printf("  • %-14s (%s)  IP: %-15s  Status: Ready for kubeadm\n", node, role, ip)
 
         printf("\nNext step: Run cluster bootstrap:\n")
-        printf("  kite run ./bootstrap.star --driver %s --cp %s\n\n", driver, cp_node)
-
-    elif action == "install-kubeadm":
-        print("Installing kubeadm on running instances...")
-        concur.map(all_nodes, lambda n: install_kubeadm_node(driver, n, k8s_ver))
-        print("\nKubeadm installation pass complete.")
+        printf("  kite run ./bootstrap.star --cp %s\n\n", cp_node)
 
     elif action == "status":
-        print("Querying machine and kubeadm status:")
+        print("Querying machine status:")
         for node in all_nodes:
-            ip = get_node_ip(driver, node)
-            ver = exec_node(driver, node, "kubeadm version -o short 2>/dev/null || echo 'not installed'")
-            printf("  • %-14s  IP: %-15s  Kubeadm: %s\n", node, ip, ver.stdout.strip())
+            status = lima.get_status(node)
+            ip = lima.get_ip(node) if status == "Running" else "N/A"
+            ver = "N/A"
+            if status == "Running":
+                ver_res = lima.exec(node, "kubeadm version -o short 2>/dev/null || echo 'not installed'")
+                ver = ver_res.stdout.strip()
+            printf("  • %-14s  Status: %-10s  IP: %-15s  Kubeadm: %s\n", node, status, ip, ver)
 
     elif action == "stop":
         print("Stopping machines...")
         for node in all_nodes:
             printf("  Stopping %s...\n", node)
-            if driver == "lima":
-                run_local("limactl stop " + node)
-            elif driver == "multipass":
-                run_local("multipass stop " + node)
+            lima.stop(node)
         print("All machines stopped.")
 
     elif action == "destroy":
-        print("Destroying and cleaning up machines...")
+        print("Destroying machines and clearing runtime manifests...")
         for node in all_nodes:
             printf("  Destroying %s...\n", node)
-            if driver == "lima":
-                run_local("limactl stop -f %s 2>/dev/null || true" % node)
-                run_local("limactl delete -f %s 2>/dev/null || true" % node)
-                run_local("rm -f manifests/lima-%s.yaml" % node)
-            elif driver == "multipass":
-                run_local("multipass delete --purge %s 2>/dev/null || true" % node)
-                run_local("rm -f manifests/multipass-%s.yaml" % node)
+            lima.delete(node, force = True)
         print("Teardown complete.")
 
     else:
-        fail("Unknown action: " + action + ". Supported actions: start, install-kubeadm, status, stop, destroy")
+        fail("Unknown action: " + action + ". Supported actions: start, status, stop, destroy")
