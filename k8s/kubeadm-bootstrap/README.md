@@ -180,6 +180,26 @@ kite run ./setup.star --action destroy --driver lima
 
 ---
 
+## Built-in Starkite Modules & Platform Alignment
+
+To ensure a self-contained automation workflow, these scripts maximize the use of Starkite's built-in standard library:
+
+| Functionality | Standard CLI Approach | Starkite Native Solution | Built-in Module |
+|---|---|---|---|
+| **Machine YAML Generation** | Arcane bash heredocs & `cat <<EOF` | Structured Starlark dictionary encoding | `yaml.encode` |
+| **CNI Manifest Fetching** | Shell `curl` / `wget` commands | In-process HTTP GET with timeout support | `http.get` |
+| **Cluster In-Process TLS** | Shell `kubectl` CLI binary | Native Go client-go dynamic client with TLS negotiation | `k8s.config` |
+| **Day-2 Node Operations** | `kubectl cordon`, `kubectl drain` | Programmatic node cordon, pod eviction, and deletion | `k8s.cordon`, `k8s.drain` |
+| **Cluster Readiness Polling** | `kubectl get nodes -o wide` parsing | Native resource inspection over API conditions | `k8s.list("node")` |
+| **Concurrent Worker Join** | Complex bash backgrounding (`&`) | Multi-threaded deterministic task mapping | `concur.map` |
+
+### Architectural Gaps & Future Roadmap
+
+* **Native X.509 / PKI Generation (`pki.*`)**: Starkite has an active proposal ([`starkite-pki-management.md`](../../../project-planning/starkite/starkite-pki-management.md)) for native X.509 certificate and CA management (`pki.ca`, `pki.sign`, `pki.inspect`). Until implemented, Kubernetes CA generation and API server SAN issuance are handled by `kubeadm init` and `kubeadm init phase certs apiserver`.
+* **ASN.1 / SubjectPublicKeyInfo Extraction**: The `kubeadm join` token CA cert hash requires SHA-256 over the DER-encoded `SubjectPublicKeyInfo`. Once the `pki` module is introduced, Starkite will compute this directly from `ca.crt` using `hash.bytes(...)` without relying on `kubeadm token create`.
+
+---
+
 ## Comparison: Cluster API vs. Starkite Standalone
 
 | Lifecycle Dimension | Cluster API (CAPI) | Starkite Bootstrapper |

@@ -15,6 +15,8 @@ load("./common.star", "common")
 
 exec_node = common.exec_node
 run_local = common.run_local
+get_k8s_client = common.get_k8s_client
+wait_for_package_manager = common.wait_for_package_manager
 
 # ---------------------------------------------------------------------------
 # CLI Argument Schema
@@ -48,12 +50,43 @@ args.list(
     help = "Worker node hostnames to upgrade sequentially (comma-separated or repeatable)",
 )
 
-def upgrade_control_plane(driver, cp_node, version):
+args.string(
+    "kubeconfig",
+    shorthand = "k",
+    default = "./kubeconfig",
+    help = "Path to admin kubeconfig file",
+)
+
+def print_cluster_nodes(k8s_client):
+    """Renders the cluster node table directly from the Kubernetes API."""
+    nodes = k8s_client.list("node")
+    printf("%-16s %-10s %-16s %-12s %-16s\n", "NAME", "STATUS", "ROLES", "VERSION", "INTERNAL-IP")
+    for n in nodes:
+        name = n.metadata.name
+        status = "NotReady"
+        for c in n.status.conditions:
+            if c.type == "Ready" and c.status == "True":
+                status = "Ready"
+        roles = []
+        if hasattr(n.metadata, "labels") and n.metadata.labels:
+            for label in n.metadata.labels:
+                if label.startswith("node-role.kubernetes.io/"):
+                    roles.append(label.split("/")[1])
+        role_str = ",".join(roles) if len(roles) > 0 else "<none>"
+        version = n.status.nodeInfo.kubeletVersion
+        ip = "unknown"
+        for addr in n.status.addresses:
+            if addr.type == "InternalIP":
+                ip = addr.address
+        printf("%-16s %-10s %-16s %-12s %-16s\n", name, status, role_str, version, ip)
+
+def upgrade_control_plane(driver, cp_node, version, k8s_client):
     """Executes the control plane upgrade sequence."""
     printf("=== Step 1/2: Upgrading Control Plane %s to v%s ===\n\n", cp_node, version)
 
     # 1. Upgrade kubeadm binary on control plane
     printf("  [1/4] Upgrading kubeadm package to %s...\n", version)
+    wait_for_package_manager(driver, cp_node)
     pkg_cmd = "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq --allow-change-held-packages kubeadm=%s-* >/dev/null" % version
     res = exec_node(driver, cp_node, pkg_cmd)
     if not res.ok:
@@ -65,33 +98,34 @@ def upgrade_control_plane(driver, cp_node, version):
     res = exec_node(driver, cp_node, upgrade_cmd)
     if not res.ok:
         fail("kubeadm upgrade apply failed on %s: %s" % (cp_node, res.stderr))
-    printf("  [SUCCESS] Control plane plane components upgraded.\n")
+    printf("  [SUCCESS] Control plane components upgraded.\n")
 
     # 3. Upgrade kubelet and kubectl on control plane
     printf("  [3/4] Upgrading kubelet and kubectl on %s...\n", cp_node)
+    wait_for_package_manager(driver, cp_node)
     klet_cmd = "export DEBIAN_FRONTEND=noninteractive && apt-get install -y -qq --allow-change-held-packages kubelet=%s-* kubectl=%s-* >/dev/null && systemctl daemon-reload && systemctl restart kubelet" % (version, version)
     res = exec_node(driver, cp_node, klet_cmd)
     if not res.ok:
         fail("Failed upgrading kubelet on %s: %s" % (cp_node, res.stderr))
 
-    # 4. Verify control plane readiness
-    printf("  [4/4] Verifying control plane node status...\n")
+    # 4. Verify control plane readiness natively
+    printf("  [4/4] Verifying control plane node status via native k8s API...\n")
     time.sleep("5s")
-    ver_res = exec_node(driver, cp_node, "kubectl get node %s" % cp_node)
-    printf("%s\n", ver_res.stdout)
+    node_obj = k8s_client.get("node", cp_node)
+    printf("  [SUCCESS] Node %s kubelet version is %s\n\n", cp_node, node_obj.status.nodeInfo.kubeletVersion)
 
-def upgrade_worker_node(driver, cp_node, worker_node, version):
-    """Executes the in-place node upgrade for a single worker node."""
+def upgrade_worker_node(driver, cp_node, worker_node, version, k8s_client):
+    """Executes the in-place node upgrade for a single worker node using native k8s module."""
     printf("=== Upgrading Worker Node %s to v%s ===\n", worker_node, version)
 
-    # 1. Cordon & Drain
-    printf("  [1/5] Cordoning and draining %s...\n", worker_node)
-    exec_node(driver, cp_node, "kubectl cordon " + worker_node)
-    drain_cmd = "kubectl drain %s --ignore-daemonsets --delete-emptydir-data --force --grace-period=30" % worker_node
-    exec_node(driver, cp_node, drain_cmd)
+    # 1. Cordon & Drain via native k8s module
+    printf("  [1/5] Cordoning and draining %s via native k8s module...\n", worker_node)
+    k8s_client.cordon(worker_node)
+    k8s_client.drain(worker_node, force=True, ignore_daemonsets=True)
 
     # 2. Upgrade kubeadm on worker
     printf("  [2/5] Upgrading kubeadm package on %s...\n", worker_node)
+    wait_for_package_manager(driver, worker_node)
     pkg_cmd = "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq --allow-change-held-packages kubeadm=%s-* >/dev/null" % version
     res = exec_node(driver, worker_node, pkg_cmd)
     if not res.ok:
@@ -105,20 +139,24 @@ def upgrade_worker_node(driver, cp_node, worker_node, version):
 
     # 4. Upgrade kubelet and restart service
     printf("  [4/5] Upgrading kubelet and restarting service on %s...\n", worker_node)
+    wait_for_package_manager(driver, worker_node)
     klet_cmd = "export DEBIAN_FRONTEND=noninteractive && apt-get install -y -qq --allow-change-held-packages kubelet=%s-* >/dev/null && systemctl daemon-reload && systemctl restart kubelet" % version
     res = exec_node(driver, worker_node, klet_cmd)
     if not res.ok:
         fail("Failed upgrading kubelet on %s: %s" % (worker_node, res.stderr))
 
-    # 5. Uncordon & Health Gate
-    printf("  [5/5] Uncordoning %s and asserting Ready status...\n", worker_node)
-    exec_node(driver, cp_node, "kubectl uncordon " + worker_node)
+    # 5. Uncordon & Health Gate via native k8s module
+    printf("  [5/5] Uncordoning %s and asserting Ready status via native k8s API...\n", worker_node)
+    k8s_client.uncordon(worker_node)
 
     ready = False
     for attempt in range(18):
-        status_res = exec_node(driver, cp_node, "kubectl get node %s --no-headers" % worker_node)
-        if "Ready" in status_res.stdout and "NotReady" not in status_res.stdout:
-            ready = True
+        node_obj = k8s_client.get("node", worker_node)
+        for cond in node_obj.status.conditions:
+            if cond.type == "Ready" and cond.status == "True":
+                ready = True
+                break
+        if ready:
             break
         time.sleep("10s")
 
@@ -134,6 +172,9 @@ def main():
     target_version = opts.version
     cp_node = opts.cp
     workers = [w.strip() for w in opts.workers if w.strip()]
+    kubeconfig_path = opts.kubeconfig
+
+    k8s_client = get_k8s_client(kubeconfig_path)
 
     printf("\n=== Starkite Upstream Rolling Upgrade ===\n")
     printf("Driver         : %s\n", driver)
@@ -142,13 +183,12 @@ def main():
     printf("Workers        : %s\n\n", ", ".join(workers))
 
     # 1. Upgrade Control Plane
-    upgrade_control_plane(driver, cp_node, target_version)
+    upgrade_control_plane(driver, cp_node, target_version, k8s_client)
 
     # 2. Sequentially upgrade worker nodes with health verification gates
     printf("=== Step 2/2: Sequentially upgrading worker nodes ===\n\n")
     for w in workers:
-        upgrade_worker_node(driver, cp_node, w, target_version)
+        upgrade_worker_node(driver, cp_node, w, target_version, k8s_client)
 
     printf("\n=== Cluster Rolling Upgrade Complete ===\n\n")
-    nodes_res = exec_node(driver, cp_node, "kubectl get nodes -o wide")
-    printf("%s\n", nodes_res.stdout)
+    print_cluster_nodes(k8s_client)

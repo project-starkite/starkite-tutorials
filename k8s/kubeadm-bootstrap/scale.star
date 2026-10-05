@@ -3,7 +3,7 @@
 #
 # Automates Day-2 worker node operations without requiring Cluster API (CAPI):
 # 1. Scale Out (action=join): Dynamically adds a new worker node to the cluster
-# 2. Scale In (action=drain): Safely cordons, drains, and evicts workloads from a node
+# 2. Scale In (action=drain): Safely cordons, drains, and evicts workloads from a node natively
 #
 # Usage:
 #   # 1. Add / Join a new worker node (k8s-worker-3):
@@ -18,6 +18,7 @@ load("./common.star", "common")
 exec_node = common.exec_node
 get_node_ip = common.get_node_ip
 run_local = common.run_local
+get_k8s_client = common.get_k8s_client
 
 # ---------------------------------------------------------------------------
 # CLI Argument Schema
@@ -51,8 +52,38 @@ args.string(
     help = "Target worker node hostname to join or drain",
 )
 
-def scale_out(driver, cp_node, worker_node):
-    """Joins a worker node to the existing cluster."""
+args.string(
+    "kubeconfig",
+    shorthand = "k",
+    default = "./kubeconfig",
+    help = "Path to admin kubeconfig file",
+)
+
+def print_cluster_nodes(k8s_client):
+    """Renders the cluster node table directly from the Kubernetes API."""
+    nodes = k8s_client.list("node")
+    printf("%-16s %-10s %-16s %-12s %-16s\n", "NAME", "STATUS", "ROLES", "VERSION", "INTERNAL-IP")
+    for n in nodes:
+        name = n.metadata.name
+        status = "NotReady"
+        for c in n.status.conditions:
+            if c.type == "Ready" and c.status == "True":
+                status = "Ready"
+        roles = []
+        if hasattr(n.metadata, "labels") and n.metadata.labels:
+            for label in n.metadata.labels:
+                if label.startswith("node-role.kubernetes.io/"):
+                    roles.append(label.split("/")[1])
+        role_str = ",".join(roles) if len(roles) > 0 else "<none>"
+        version = n.status.nodeInfo.kubeletVersion
+        ip = "unknown"
+        for addr in n.status.addresses:
+            if addr.type == "InternalIP":
+                ip = addr.address
+        printf("%-16s %-10s %-16s %-12s %-16s\n", name, status, role_str, version, ip)
+
+def scale_out(driver, cp_node, worker_node, kubeconfig_path):
+    """Joins a worker node to the existing cluster and asserts readiness natively."""
     printf("=== Day-2 Scale Out: Joining %s to cluster ===\n\n", worker_node)
 
     # 1. Verify kubeadm is ready on the worker
@@ -74,44 +105,46 @@ def scale_out(driver, cp_node, worker_node):
     if not res.ok:
         fail("Failed joining node %s: %s" % (worker_node, res.stderr))
 
-    # 4. Wait for node to enter Ready state
-    printf("Waiting for node %s to report Ready status...\n", worker_node)
+    # 4. Wait for node to enter Ready state via native k8s client
+    printf("Waiting for node %s to report Ready status via native k8s API...\n", worker_node)
+    k8s_client = get_k8s_client(kubeconfig_path)
+    ready = False
     for attempt in range(18):
-        status_res = exec_node(driver, cp_node, "kubectl get node %s --no-headers 2>/dev/null || true" % worker_node)
-        if "Ready" in status_res.stdout and "NotReady" not in status_res.stdout:
+        node_obj = k8s_client.get("node", worker_node)
+        for cond in node_obj.status.conditions:
+            if cond.type == "Ready" and cond.status == "True":
+                ready = True
+                break
+        if ready:
             printf("  [SUCCESS] Node %s is Ready!\n", worker_node)
             break
         time.sleep("10s")
 
-    # Print updated node table
+    if not ready:
+        fail("Timed out waiting for node %s to report Ready status." % worker_node)
+
+    # Print updated node table natively
     print("\nUpdated Cluster Topology:")
-    nodes_res = exec_node(driver, cp_node, "kubectl get nodes -o wide")
-    printf("%s\n", nodes_res.stdout)
+    print_cluster_nodes(k8s_client)
 
-def scale_in(driver, cp_node, worker_node):
-    """Safely drains and removes a worker node from the cluster."""
+def scale_in(driver, cp_node, worker_node, kubeconfig_path):
+    """Safely drains and removes a worker node from the cluster using native k8s module."""
     printf("=== Day-2 Scale In: Decommissioning %s ===\n\n", worker_node)
+    k8s_client = get_k8s_client(kubeconfig_path)
 
-    # 1. Cordon the node to prevent new pod scheduling
-    printf("[1/4] Cordoning node %s...\n", worker_node)
-    cordon_res = exec_node(driver, cp_node, "kubectl cordon " + worker_node)
-    if not cordon_res.ok:
-        fail("Failed to cordon node %s: %s" % (worker_node, cordon_res.stderr))
+    # 1. Cordon the node natively
+    printf("[1/4] Cordoning node %s via native k8s module...\n", worker_node)
+    k8s_client.cordon(worker_node)
     printf("  [SUCCESS] Node %s marked SchedulingDisabled.\n", worker_node)
 
-    # 2. Gracefully drain existing pods
+    # 2. Gracefully drain existing pods natively
     printf("[2/4] Gracefully draining existing pods from %s...\n", worker_node)
-    drain_cmd = "kubectl drain %s --ignore-daemonsets --delete-emptydir-data --force --grace-period=30" % worker_node
-    drain_res = exec_node(driver, cp_node, drain_cmd)
-    if not drain_res.ok:
-        printf("  [WARNING] Drain reported warnings: %s\n", drain_res.stderr)
+    k8s_client.drain(worker_node, force=True, ignore_daemonsets=True)
     printf("  [SUCCESS] Pods evicted and rescheduled to remaining nodes.\n")
 
-    # 3. Delete node object from the Kubernetes API
-    printf("[3/4] Deleting node %s from cluster...\n", worker_node)
-    del_res = exec_node(driver, cp_node, "kubectl delete node " + worker_node)
-    if not del_res.ok:
-        fail("Failed to delete node %s: %s" % (worker_node, del_res.stderr))
+    # 3. Delete node object from the Kubernetes API natively
+    printf("[3/4] Deleting node %s from cluster via native k8s API...\n", worker_node)
+    k8s_client.delete("node", worker_node)
     printf("  [SUCCESS] Node %s removed from Kubernetes registry.\n", worker_node)
 
     # 4. Reset kubeadm on the worker node
@@ -119,10 +152,9 @@ def scale_in(driver, cp_node, worker_node):
     exec_node(driver, worker_node, "kubeadm reset -f >/dev/null 2>&1 || true")
     printf("  [SUCCESS] Node %s reset.\n", worker_node)
 
-    # Print updated node table
+    # Print updated node table natively
     print("\nUpdated Cluster Topology:")
-    nodes_res = exec_node(driver, cp_node, "kubectl get nodes -o wide")
-    printf("%s\n", nodes_res.stdout)
+    print_cluster_nodes(k8s_client)
 
 def main():
     opts = args.parse()
@@ -131,10 +163,11 @@ def main():
     action = opts.action.lower()
     cp_node = opts.cp
     node = opts.node
+    kubeconfig_path = opts.kubeconfig
 
     if action == "join":
-        scale_out(driver, cp_node, node)
+        scale_out(driver, cp_node, node, kubeconfig_path)
     elif action == "drain":
-        scale_in(driver, cp_node, node)
+        scale_in(driver, cp_node, node, kubeconfig_path)
     else:
         fail("Action must be 'join' or 'drain', got: " + action)
