@@ -186,14 +186,15 @@ kite run ./setup.star --action destroy
 
 ```
 k8s/kubeadm-bootstrap/
-├── README.md          # End-to-end tutorial guide and runbook
-├── lima.star          # Lima VM abstraction: YAML generation, JSON inspection, and lifecycle
-├── common.star        # Cross-node connectivity checks and Kubernetes client factory
-├── setup.star         # Phase 1: Machine launching and embedded OS/package provisioning
-├── bootstrap.star     # Phase 2: Kubeadm initialization, join orchestration, CNI, smoke test
-├── scale.star         # Day-2: Dynamic worker scaling (scale out / cordon & drain)
-├── upgrade.star       # Day-2: In-place zero-downtime rolling upgrades
-└── smoke-test.yaml    # Declarative workload manifest used for cluster verification
+├── README.md                 # End-to-end tutorial guide and runbook
+├── cloud-init-template.yaml  # Go text/template specification for Lima cloud-init VMs
+├── lima.star                 # Lima VM abstraction: template rendering, JSON inspection, lifecycle
+├── common.star               # Cross-node connectivity checks and Kubernetes client factory
+├── setup.star                # Phase 1: Machine launching and embedded OS/package provisioning
+├── bootstrap.star            # Phase 2: Kubeadm initialization, join orchestration, CNI, smoke test
+├── scale.star                # Day-2: Dynamic worker scaling (scale out / cordon & drain)
+├── upgrade.star              # Day-2: In-place zero-downtime rolling upgrades
+└── smoke-test.yaml           # Declarative workload manifest used for cluster verification
 ```
 
 Runtime artifacts are generated outside the source repository under `~/.starkite/tutorials/k8s/`:

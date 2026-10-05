@@ -38,80 +38,21 @@ def ensure_dirs():
     """Ensures that runtime directories exist."""
     _sh_exec("mkdir -p " + get_manifests_dir())
 
-def generate_manifest(node, cpus = 2, memory_gb = 2, disk_gb = 20, k8s_version = "1.31"):
-    """Generates a Lima YAML instance definition file using Starkite templating and declarative data provisions."""
+def generate_manifest(node, cpus = 2, memory_gb = 2, disk_gb = 20, k8s_version = "1.31", template_path = "./cloud-init-template.yaml"):
+    """Generates a Lima YAML instance definition file using externalized cloud-init-template.yaml."""
     ensure_dirs()
     manifest_path = "%s/lima-%s.yaml" % (get_manifests_dir(), node)
 
-    # Starkite-centric template for the embedded provisioning script
-    script_tmpl = template.text("""#!/bin/bash
-set -eux -o pipefail
-
-# 1. OS kernel runtime activation
-swapoff -a
-sed -i '/swap/d' /etc/fstab
-modprobe overlay
-modprobe br_netfilter
-sysctl --system
-
-# 2. Containerd runtime
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq containerd
-mkdir -p /etc/containerd
-containerd config default > /etc/containerd/config.toml
-sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-systemctl restart containerd
-systemctl enable containerd
-
-# 3. Kubernetes packages
-mkdir -p -m 755 /etc/apt/keyrings
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{.version}}/deb/Release.key | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{.version}}/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
-apt-get update -qq
-apt-get install -y -qq kubelet kubeadm kubectl
-apt-mark hold kubelet kubeadm kubectl
-systemctl enable kubelet
-""")
-
-    provision_script = script_tmpl.render({"version": k8s_version})
-
-    # Declarative Lima machine specification using Starkite data structures
-    manifest_data = {
-        "base": ["template:ubuntu-24.04"],
+    tmpl = template.file(template_path)
+    rendered_yaml = tmpl.render({
+        "node": node,
         "cpus": cpus,
-        "memory": "%dGiB" % memory_gb,
-        "disk": "%dGiB" % disk_gb,
-        "networks": [{"lima": "user-v2"}],
-        "containerd": {
-            "system": False,
-            "user": False,
-        },
-        "provision": [
-            {
-                "mode": "data",
-                "path": "/etc/modules-load.d/k8s.conf",
-                "content": "overlay\nbr_netfilter\n",
-                "owner": "root:root",
-                "permissions": "0644",
-            },
-            {
-                "mode": "data",
-                "path": "/etc/sysctl.d/k8s.conf",
-                "content": "net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n",
-                "owner": "root:root",
-                "permissions": "0644",
-            },
-            {
-                "mode": "system",
-                "script": provision_script,
-            },
-        ],
-    }
+        "memory_gb": memory_gb,
+        "disk_gb": disk_gb,
+        "k8s_version": k8s_version,
+    })
 
-    # Encode with Starkite yaml module and write with Starkite fs module
-    encoded_manifest = yaml.encode(manifest_data)
-    fs.path(manifest_path).write_text(encoded_manifest)
+    fs.path(manifest_path).write_text(rendered_yaml)
     return manifest_path
 
 def read_file(node, remote_path):
