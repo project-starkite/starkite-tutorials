@@ -60,11 +60,13 @@ def fetch_and_save_kubeconfig(cp_node, output_path):
     adapted_conf = raw_conf.replace("https://" + cp_ip + ":6443", "https://127.0.0.1:6443")
 
     # Ensure target parent directory exists natively and write kubeconfig
-    parent_dir = output_path[:output_path.rfind("/")]
+    resolved_path = lima.resolve_path(output_path)
+    parent_dir = resolved_path[:resolved_path.rfind("/")]
     if parent_dir:
         fs.path(parent_dir).mkdir(parents = True)
-    fs.path(output_path).write_text(adapted_conf)
-    printf("  [SUCCESS] Kubeconfig saved to %s (API endpoint: https://127.0.0.1:6443)\n", output_path)
+    fs.path(resolved_path).write_text(adapted_conf)
+    display_path = output_path.replace(os.home(), "~")
+    printf("  [SUCCESS] Kubeconfig saved to %s (API endpoint: https://127.0.0.1:6443)\n", display_path)
     return adapted_conf
 
 def get_join_command(cp_node):
@@ -162,18 +164,21 @@ def print_cluster_nodes(k8s_client, kubeconfig_path = None):
         printf("%-16s %-10s %-16s %-12s %-16s\n", name, status_str, role_str, version, internal_ip)
 
     if kubeconfig_path:
+        display_path = kubeconfig_path.replace(os.home(), "~")
         printf("\nTo interact with your cluster locally:\n")
-        printf("  export KUBECONFIG=%s\n", kubeconfig_path)
+        printf("  export KUBECONFIG=%s\n", display_path)
         printf("  kubectl get pods -A\n\n")
     else:
         print("")
 
 def show_cluster_status(kubeconfig_path):
     """Displays cluster summary if kubeconfig is present and api-server is accessible."""
-    if not fs.path(kubeconfig_path).exists():
-        printf("Kubeconfig not found at %s. Has the cluster been bootstrapped?\n\n", kubeconfig_path)
+    resolved_path = lima.resolve_path(kubeconfig_path)
+    if not fs.path(resolved_path).exists():
+        display_path = kubeconfig_path.replace(os.home(), "~")
+        printf("Kubeconfig not found at %s. Has the cluster been bootstrapped?\n\n", display_path)
         return False
-    k8s_client = get_k8s_client(kubeconfig_path)
+    k8s_client = get_k8s_client(resolved_path)
     print_cluster_nodes(k8s_client, kubeconfig_path)
     return True
 

@@ -52,7 +52,7 @@ This directory contains standalone Starlark tutorials demonstrating the 3-tier a
 | Script / Directory | Tier | Topic | Key APIs |
 |---|---|---|---|
 | [`12-multi-protocol-onboarding.star`](./12-multi-protocol-onboarding.star) | Platform | Multi-Protocol Tenant Onboarding & Last-Mile Delivery | `sql.open()`, `db.tx()`, `defer()`, `k8s.obj.*`, `k8s.apply()`, `k8s.yaml()` |
-| [`kubeadm-bootstrap/`](./kubeadm-bootstrap/) | Infra | Local Machine Provisioning & Kubeadm Setup (Lima / Podman) | `os.sh()`, `concur.map()`, `limactl`, `podman`, `apt-get` |
+| [`kubeadm-cluster/`](./kubeadm-cluster/) | Infra | Upstream Kubernetes Cluster Lifecycle & Day-2 Management (Lima VMs) | `template.file()`, `concur.map()`, `limactl`, `k8s.wait_for()`, `k8s.cordon/drain` |
 | [`k3s-bootstrap/`](./k3s-bootstrap/) | Infra | Multi-Node k3s Cluster Provisioning over SSH | `ssh.config()`, jump host proxying, token extraction |
 
 ---
@@ -321,28 +321,29 @@ kite run ./12-multi-protocol-onboarding.star --var mode=apply
 
 ---
 
-### 13. Upstream Kubeadm Local Machine Setup (`kubeadm-bootstrap/`)
+### 13. Upstream Kubernetes Cluster Lifecycle & Day-2 Operations (`kubeadm-cluster/`)
 
-Automates the local infrastructure and OS preparation required before running `kubeadm init` or `kubeadm join`:
-- **Configurable Machine Drivers**: Supports starting either Lima Linux VMs (macOS native) or Podman privileged systemd containers.
-- **Kernel & Networking Prerequisites**: Disables swap, loads `overlay` and `br_netfilter` kernel modules, and configures sysctl IP forwarding.
-- **Containerd Setup**: Installs containerd and configures `SystemdCgroup = true`.
-- **Kubeadm Tooling Installation**: Configures official `pkgs.k8s.io` repository, installs `kubelet`, `kubeadm`, and `kubectl` at the requested version, and holds package updates.
+Demonstrates Starkite's versatility across multi-layered infrastructure orchestration—from local VM provisioning through full upstream Kubernetes cluster bootstrap, Day-2 node scaling, and zero-downtime rolling upgrades:
+- **Executable Module**: Structured as a standalone Starkite module (`mod.yaml` + `main.star`) that can be executed directly via `kite run ./kubeadm-cluster`.
+- **Declarative Cloud-Init Templating**: Generates customized Lima VM definitions with embedded cloud-init provisioning using `template.file()`.
+- **Full Upstream Bootstrap**: Manages `kubeadm init`, concurrent worker node joining (`concur.map()`), CNI installation (`http.url().get()` + `k8s.apply()`), and workload smoke testing.
+- **Day-2 Dynamic Scaling**: Cordon, drain, join, and decommission worker nodes dynamically.
+- **Rolling In-Place Upgrades**: Sequentially upgrades control plane and worker nodes with automated package maintenance and declarative `k8s.wait_for` health assertions.
+- **Clean Workspace Isolation**: Dynamic runtime manifests and kubeconfig are saved to `~/.starkite/tutorials/k8s/` to avoid repository leakage.
 
 ```bash
-cd kubeadm-bootstrap/
+cd kubeadm-cluster/
 
-# Start machines and install kubeadm via Lima VMs (default):
-kite run ./setup.star --var driver=lima
+# Run via Starkite module execution:
+kite run . --action status
 
-# Start machines and install kubeadm via Podman containers:
-kite run ./setup.star --var driver=podman
-
-# Check status across all provisioned nodes:
-kite run ./setup.star --var action=status --var driver=lima
-
-# Teardown and clean up all machines:
-kite run ./setup.star --var action=destroy --var driver=lima
+# Or execute with explicit actions:
+./main.star --action setup
+./main.star --action bootstrap
+./main.star --action status
+./main.star --action add-node --node k8s-worker-3
+./main.star --action upgrade --version 1.31.2
+./main.star --action destroy
 ```
 
 

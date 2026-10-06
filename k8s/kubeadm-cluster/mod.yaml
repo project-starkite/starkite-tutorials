@@ -1,0 +1,3 @@
+name: kubeadm-cluster
+version: 0.1.0
+description: Upstream Kubernetes cluster lifecycle orchestration using kubeadm and Lima VMs

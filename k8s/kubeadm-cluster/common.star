@@ -28,4 +28,5 @@ def get_k8s_client(kubeconfig_path = None):
     """Returns a native Starkite Kubernetes client configured with the given kubeconfig."""
     if not kubeconfig_path:
         kubeconfig_path = lima.get_kubeconfig_path()
-    return k8s.config(kubeconfig = kubeconfig_path)
+    return k8s.config(kubeconfig = lima.resolve_path(kubeconfig_path))
+

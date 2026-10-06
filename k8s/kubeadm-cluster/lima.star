@@ -17,6 +17,12 @@ def check_prerequisites():
     if not os.which("limactl"):
         fail("limactl not found in PATH. Install with: brew install lima")
 
+def resolve_path(p):
+    """Expands ~ in paths to user home directory."""
+    if p.startswith("~/"):
+        return os.home() + p[1:]
+    return p
+
 def get_data_dir():
     """Returns the root directory for runtime cluster files (~/.starkite/tutorials/k8s)."""
     return os.home() + "/.starkite/tutorials/k8s"
@@ -26,8 +32,8 @@ def get_manifests_dir():
     return get_data_dir() + "/manifests"
 
 def get_kubeconfig_path():
-    """Returns the default cluster kubeconfig file path."""
-    return get_data_dir() + "/kubeconfig"
+    """Returns the portable default cluster kubeconfig file path."""
+    return "~/.starkite/tutorials/k8s/kubeconfig"
 
 def ensure_dirs():
     """Ensures that runtime directories exist using native fs.path.mkdir."""

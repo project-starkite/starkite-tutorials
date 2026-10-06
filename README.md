@@ -84,7 +84,7 @@ Tutorials covering the 3-tier architecture of Starkite's `k8s` module, from reso
 * [`10-crd-operator.star`](k8s/10-crd-operator.star): Complete CustomResourceDefinition (CRD) operator pattern with child management.
 * [`11-cluster-auditor.star`](k8s/11-cluster-auditor.star): Multi-namespace reliability, security, and governance auditor.
 * [`12-multi-protocol-onboarding.star`](k8s/12-multi-protocol-onboarding.star): Multi-protocol tenant onboarding (relational SQL migrations + K8s workloads).
-* [`kubeadm-bootstrap/`](k8s/kubeadm-bootstrap/): Local machine setup and upstream kubeadm installation via Lima or Podman.
+* [`kubeadm-cluster/`](k8s/kubeadm-cluster/): Upstream Kubernetes cluster lifecycle, Day-2 scaling, and rolling upgrades via Lima VMs.
 * [`k3s-bootstrap/`](k8s/k3s-bootstrap/): Multi-node k3s cluster provisioning via SSH jump host orchestration.
 
 ### 2. Model Context Protocol (`mcp/`)

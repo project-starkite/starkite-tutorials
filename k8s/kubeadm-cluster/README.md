@@ -203,7 +203,8 @@ To permanently destroy all instances and clean up runtime manifests:
 ## Modular File Architecture
 
 ```
-k8s/kubeadm-bootstrap/
+k8s/kubeadm-cluster/
+├── mod.yaml                    # Starkite executable module manifest
 ├── main.star                   # Unified CLI entrypoint aggregating all flags and lifecycle actions
 ├── lima-machine-template.yaml  # Go text/template specification for Lima cloud-init VMs
 ├── lima.star                   # Lima VM abstraction: VM lifecycle, guest packages, native OS calls
