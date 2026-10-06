@@ -13,15 +13,23 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
 2. **Multi-Domain Composition**: Seamlessly stitches together virtual machine lifecycle management (**Lima VMs**), declarative file templating (`template.file`), remote execution, and native Kubernetes API manipulation (`k8s` module).
 3. **Rootless Bootstrap Capability**: Because Starkite bridges host-level virtualization and Kubernetes API semantics, it easily solves root-cluster bootstrapping scenarios—provisioning VMs from raw images, initializing `kubeadm`, joining workers concurrently (`concur.map`), applying networking, and verifying workloads.
 4. **Day-2 Operational Control**: The same scripts manage full Day-2 lifecycles: dynamic worker addition, graceful workload cordoning and draining, live status inspection, and rolling zero-downtime version upgrades.
-5. **Clean Workspace Isolation**: Dynamic runtime artifacts (per-instance machine specifications and administrative kubeconfig) are isolated in `~/.starkite/tutorials/k8s/`, ensuring zero repository leakage.
+5. **Declarative Health Synchronization**: Employs Starkite's native `k8s.wait_for` construct for declarative condition polling instead of ad-hoc sleep loops.
+6. **Clean Workspace Isolation**: Dynamic runtime artifacts (per-instance machine specifications and administrative kubeconfig) are isolated in `~/.starkite/tutorials/k8s/`, ensuring zero repository leakage.
 
 ```
                            Cluster Lifecycle Overview
                            
-   1. setup.star    ──► Generates YAML & starts Lima VMs with embedded containerd/kubeadm
-   2. cluster.star  ──► Day-0/1: Bootstraps control plane, joins workers, applies CNI, smoke test
-                        Day-2: Dynamically adds (add-node) or decommissions (remove-node) workers
-   3. upgrade.star  ──► Day-2: Sequential rolling upgrade (CP -> drain -> node upgrade -> uncordon)
+                  ┌───────────────── main.star ─────────────────┐
+                  │                                             │
+      --action setup         --action bootstrap        --action add-node / remove-node
+            │                         │                               │
+       setup.star               cluster.star                     cluster.star
+     (Lima VMs & K8s)      (kubeadm init, CNI, smoke)         (k8s.wait_for, cordon)
+            │                         │                               │
+            └────────────►     --action upgrade      ◄────────────────┘
+                                      │
+                                 upgrade.star
+                         (rolling in-place upgrade)
 ```
 
 ---
@@ -34,9 +42,9 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
 
 ---
 
-## Step 1: Provision Machines & Install Kubeadm (`setup.star`)
+## Step 1: Provision Machines & Install Kubeadm
 
-`setup.star` renders machine specifications from `cloud-init-template.yaml` (saved to `~/.starkite/tutorials/k8s/manifests/lima-*.yaml`), provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`), and embeds complete system provisioning directly into Lima's declarative cloud-init specification:
+The `setup` action renders machine specifications from `lima-machine-template.yaml` (saved to `~/.starkite/tutorials/k8s/manifests/lima-*.yaml`), provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`), and embeds complete system provisioning directly into Lima's declarative cloud-init specification:
 * Disables Linux swap (`swapoff -a`, removes swap from `/etc/fstab`).
 * Loads `overlay` and `br_netfilter` kernel modules.
 * Configures sysctl networking (`net.bridge.bridge-nf-call-iptables = 1`, `net.ipv4.ip_forward = 1`).
@@ -45,30 +53,30 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
 
 ```bash
 # Start machines and provision prerequisites via Lima:
-kite run ./setup.star
+./main.star --action setup
 ```
 
 Verify that all machines are online and report `kubeadm` installed:
 
 ```bash
-kite run ./setup.star --action status
+./main.star --action status
 ```
 
 ---
 
-## Step 2: Bootstrap the Upstream Cluster (`cluster.star`)
+## Step 2: Bootstrap the Upstream Cluster
 
-`cluster.star` executes the Day-0 and Day-1 initialization sequence:
+The `bootstrap` action executes the Day-0 and Day-1 initialization sequence:
 1. Verifies bidirectional network connectivity across all nodes (`common.verify_cluster_mesh`).
 2. Executes `kubeadm init --pod-network-cidr=10.244.0.0/16` with localhost SAN injection (`127.0.0.1,localhost`).
 3. Downloads the cluster `admin.conf` to `~/.starkite/tutorials/k8s/kubeconfig`.
 4. Generates the join token and concurrently joins `k8s-worker-1` and `k8s-worker-2` via `concur.map`.
 5. Applies the Flannel CNI network plugin via `http.url().get()` and `k8s.apply()`.
-6. Polls node status until all nodes reach `Ready` state.
+6. Uses `k8s.wait_for` to assert that all nodes transition to `Ready` status.
 7. Deploys the static smoke-test workload (`smoke-test.yaml`) to verify scheduling and networking.
 
 ```bash
-kite run ./cluster.star
+./main.star --action bootstrap
 ```
 
 **Expected Output:**
@@ -95,7 +103,10 @@ Kubeconfig Out : ~/.starkite/tutorials/k8s/kubeconfig
   [k8s-worker-2 SUCCESS] Joined cluster successfully.
 [4/5] Installing Container Network Interface (CNI: flannel)...
   [SUCCESS] Flannel CNI manifests applied natively.
-[5/5] Waiting for all 3 nodes to reach Ready state...
+[5/5] Waiting for all 3 nodes to reach Ready state via native k8s.wait_for...
+  Waiting for node k8s-cp to reach Ready state...
+  Waiting for node k8s-worker-1 to reach Ready state...
+  Waiting for node k8s-worker-2 to reach Ready state...
   [SUCCESS] All 3 nodes are in Ready state!
 
 Deploying smoke-test workload to verify cluster functionality...
@@ -124,19 +135,19 @@ kubectl get pods -A
 
 ---
 
-## Step 4: Day-2 Dynamic Node Scaling (`cluster.star`)
+## Step 4: Day-2 Dynamic Node Scaling
 
-`cluster.star` manages ongoing worker scaling operations through native Kubernetes API calls and remote node execution.
+Dynamic worker scaling operations are executed through native Kubernetes API calls and remote node execution.
 
 ### Scale Out: Add a Worker Node (`--action add-node`)
 To provision and join an additional node (`k8s-worker-3`):
 
 ```bash
 # 1. Start the machine instance if not already running:
-kite run ./setup.star --workers k8s-worker-3
+./main.star --action setup --workers k8s-worker-3
 
-# 2. Add the worker to the live cluster:
-kite run ./cluster.star --action add-node --node k8s-worker-3
+# 2. Add the worker to the live cluster (health checked via k8s.wait_for):
+./main.star --action add-node --node k8s-worker-3
 ```
 
 ### Scale In: Safe Node Decommissioning & Eviction (`--action remove-node`)
@@ -147,44 +158,44 @@ To decommission an existing worker node (`k8s-worker-2`):
 4. **Resets** `kubeadm` on the target machine.
 
 ```bash
-kite run ./cluster.star --action remove-node --node k8s-worker-2
+./main.star --action remove-node --node k8s-worker-2
 ```
 
-### Inspect Live Cluster Status (`--action status`)
-To view current node health and topology directly from the Kubernetes API:
+### Inspect Combined Environment Status (`--action status`)
+To view machine state and live cluster topology from a single command:
 
 ```bash
-kite run ./cluster.star --action status
+./main.star --action status
 ```
 
 ---
 
-## Step 5: Day-2 Zero-Downtime Rolling Upgrade (`upgrade.star`)
+## Step 5: Day-2 Zero-Downtime Rolling Upgrade
 
-Demonstrates an in-place rolling version upgrade following the official upstream Kubernetes upgrade runbook:
+Executes an in-place rolling version upgrade following the official upstream Kubernetes upgrade runbook:
 1. **Control Plane Upgrade**: Upgrades the `kubeadm` package, executes `kubeadm upgrade apply`, and restarts `kubelet`.
 2. **Sequential Worker Node Upgrades**: For each worker, cordons the node, evicts pods via `drain`, upgrades `kubeadm`, runs `kubeadm upgrade node`, restarts `kubelet`, and uncordons.
-3. **Health Verification Gates**: Asserts that each worker returns to `Ready` status before touching the next node.
+3. **Health Verification Gates**: Uses `k8s.wait_for` to assert that each worker returns to `Ready` status before touching subsequent nodes.
 
 ```bash
 # Upgrade cluster to target version:
-kite run ./upgrade.star --version 1.31.2
+./main.star --action upgrade --version 1.31.2
 ```
 
 ---
 
 ## Step 6: Teardown & Clean Up
 
-To stop machines without deleting them:
+To stop virtual machines without deleting them:
 
 ```bash
-kite run ./setup.star --action stop
+./main.star --action stop
 ```
 
 To permanently destroy all instances and clean up runtime manifests:
 
 ```bash
-kite run ./setup.star --action destroy
+./main.star --action destroy
 ```
 
 ---
@@ -193,14 +204,14 @@ kite run ./setup.star --action destroy
 
 ```
 k8s/kubeadm-bootstrap/
-├── README.md                 # End-to-end tutorial guide and runbook
-├── cloud-init-template.yaml  # Go text/template specification for Lima cloud-init VMs
-├── lima.star                 # Lima VM abstraction: template rendering, JSON inspection, lifecycle
-├── common.star               # Cross-node connectivity checks and Kubernetes client factory
-├── setup.star                # Phase 1: Machine launching and embedded OS/package provisioning
-├── cluster.star              # Phase 2 & Day-2: Cluster bootstrap, worker scaling (add/remove), and status
-├── upgrade.star              # Day-2: In-place zero-downtime rolling upgrades
-└── smoke-test.yaml           # Declarative workload manifest used for cluster verification
+├── main.star                   # Unified CLI entrypoint aggregating all flags and lifecycle actions
+├── lima-machine-template.yaml  # Go text/template specification for Lima cloud-init VMs
+├── lima.star                   # Lima VM abstraction: native os.try_exec, os.which, and fs.path
+├── common.star                 # Cross-node connectivity checks and Kubernetes client factory
+├── setup.star                  # Module: Machine launching and embedded OS/package provisioning
+├── cluster.star                # Module: Kubeadm bootstrap, worker scaling, and k8s.wait_for readiness
+├── upgrade.star                # Module: In-place zero-downtime rolling upgrades with health gates
+└── smoke-test.yaml             # Declarative workload manifest used for cluster verification
 ```
 
 Runtime artifacts are generated outside the source repository under `~/.starkite/tutorials/k8s/`:

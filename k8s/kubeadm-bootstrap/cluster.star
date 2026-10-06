@@ -1,84 +1,17 @@
-#!/usr/bin/env kite --allow-all
-# cluster.star - Upstream Kubernetes Cluster Lifecycle Management
+# cluster.star - Upstream Kubernetes Cluster Lifecycle Operations
 #
-# Provides end-to-end cluster lifecycle operations using kubeadm and native Starkite primitives:
+# Provides core cluster operations using kubeadm and native Starkite primitives:
 # - Day-0 & Day-1: Bootstrap control plane, join workers, apply CNI, deploy smoke test
-# - Day-2 Scaling: Dynamically add worker nodes or cordons, drains, and decommission nodes
-# - Topology: Inspect cluster node status and health natively
-#
-# Usage:
-#   # 1. Bootstrap cluster (default: k8s-cp, k8s-worker-1, k8s-worker-2):
-#   kite run ./cluster.star
-#
-#   # 2. Add / scale out a new worker node:
-#   kite run ./cluster.star --action add-node --node k8s-worker-3
-#
-#   # 3. Safely decommission / drain a worker node:
-#   kite run ./cluster.star --action remove-node --node k8s-worker-2
-#
-#   # 4. Query live cluster node status:
-#   kite run ./cluster.star --action status
+# - Day-2 Scaling: Dynamically add worker nodes or cordon, drain, and decommission nodes
+# - Readiness Verification: Uses native k8s.wait_for construct to assert Ready condition
+# - Topology & Health: Inspect cluster node status and health natively
 
 load("concur", "concur")
-load("time", "time")
 load("./lima.star", "lima")
 load("./common.star", "common")
 
 verify_cluster_mesh = common.verify_cluster_mesh
 get_k8s_client = common.get_k8s_client
-
-# ---------------------------------------------------------------------------
-# CLI Argument Schema
-# ---------------------------------------------------------------------------
-args.string(
-    "action",
-    shorthand = "a",
-    default = "bootstrap",
-    choices = ["bootstrap", "add-node", "remove-node", "join", "drain", "status"],
-    help = "Cluster action: bootstrap, add-node, remove-node, status",
-)
-
-args.string(
-    "cp",
-    default = "k8s-cp",
-    help = "Control plane node machine name",
-)
-
-args.list(
-    "workers",
-    shorthand = "w",
-    default = ["k8s-worker-1", "k8s-worker-2"],
-    item_type = "string",
-    help = "Worker node hostnames for bootstrap (comma-separated or repeatable)",
-)
-
-args.string(
-    "node",
-    shorthand = "n",
-    default = "k8s-worker-2",
-    help = "Target worker node hostname to add or remove",
-)
-
-args.string(
-    "pod-cidr",
-    flag = "pod-cidr",
-    default = "10.244.0.0/16",
-    help = "Pod network CIDR block",
-)
-
-args.string(
-    "cni",
-    default = "flannel",
-    choices = ["flannel", "calico"],
-    help = "CNI network plugin to install (flannel or calico)",
-)
-
-args.string(
-    "kubeconfig",
-    shorthand = "k",
-    default = lima.get_kubeconfig_path(),
-    help = "Path to cluster admin kubeconfig file",
-)
 
 # ---------------------------------------------------------------------------
 # Core Lifecycle Functions
@@ -118,17 +51,17 @@ def init_control_plane(cp_node, pod_cidr):
     lima.exec(cp_node, "for d in /home/*; do if [ -d \"$d\" ]; then mkdir -p \"$d/.kube\" && cp -f /etc/kubernetes/admin.conf \"$d/.kube/config\" && chown -R $(stat -c '%u:%g' \"$d\") \"$d/.kube\" 2>/dev/null || true; fi; done")
 
 def fetch_and_save_kubeconfig(cp_node, output_path):
-    """Retrieves admin.conf from the control plane and saves it locally."""
+    """Retrieves admin.conf from the control plane and saves it locally using native fs.path."""
     printf("[2/5] Fetching cluster kubeconfig from %s...\n", cp_node)
     cp_ip = lima.get_ip(cp_node)
     raw_conf = lima.read_file(cp_node, "/etc/kubernetes/admin.conf")
     # Host connects via forwarded loopback port 6443
     adapted_conf = raw_conf.replace("https://" + cp_ip + ":6443", "https://127.0.0.1:6443")
 
-    # Ensure target parent directory exists and write kubeconfig
+    # Ensure target parent directory exists natively and write kubeconfig
     parent_dir = output_path[:output_path.rfind("/")]
     if parent_dir:
-        os.sh().try_exec("mkdir -p " + parent_dir)
+        fs.path(parent_dir).mkdir(parents = True)
     fs.path(output_path).write_text(adapted_conf)
     printf("  [SUCCESS] Kubeconfig saved to %s (API endpoint: https://127.0.0.1:6443)\n", output_path)
     return adapted_conf
@@ -175,32 +108,15 @@ def install_cni(k8s_client, cni_type):
     else:
         fail("Unsupported CNI: " + cni_type + ". Choose 'flannel' or 'calico'.")
 
-def assert_cluster_readiness(k8s_client, expected_count):
-    """Polls until all expected nodes report Ready status using Starkite's native k8s client."""
-    printf("[5/5] Waiting for all %d nodes to reach Ready state...\n", expected_count)
-    max_retries = 30
-    ready = False
-
-    for attempt in range(max_retries):
-        nodes = k8s_client.list("node")
-        ready_count = 0
-        for n in nodes:
-            for cond in n.status.conditions:
-                if cond.type == "Ready" and cond.status == "True":
-                    ready_count = ready_count + 1
-                    break
-
-        if ready_count >= expected_count:
-            ready = True
-            break
-
-        printf("  Attempt %d/%d: %d/%d nodes Ready. Waiting 10s...\n", attempt + 1, max_retries, ready_count, expected_count)
-        time.sleep("10s")
-
-    if not ready:
-        fail("Timed out waiting for all nodes to reach Ready state.")
-
-    printf("  [SUCCESS] All %d nodes are in Ready state!\n", expected_count)
+def assert_cluster_readiness(k8s_client, nodes):
+    """Waits until all specified nodes report Ready status using Starkite's native k8s.wait_for construct."""
+    printf("[5/5] Waiting for all %d nodes to reach Ready state via native k8s.wait_for...\n", len(nodes))
+    for node in nodes:
+        printf("  Waiting for node %s to reach Ready state...\n", node)
+        res = k8s_client.wait_for("node", node, condition = "ready", timeout = "5m")
+        if not res.ready:
+            fail("Timed out waiting for node %s to reach Ready state: %s" % (node, res.message))
+    printf("  [SUCCESS] All %d nodes are in Ready state!\n", len(nodes))
 
 def deploy_smoke_test_workload(k8s_client):
     """Deploys an application stack from smoke-test.yaml to verify cluster scheduling and pod networking."""
@@ -244,19 +160,28 @@ def print_cluster_summary(k8s_client, kubeconfig_path):
     printf("  export KUBECONFIG=%s\n", kubeconfig_path)
     printf("  kubectl get pods -A\n\n")
 
+def show_cluster_status(kubeconfig_path):
+    """Displays cluster summary if kubeconfig is present and api-server is accessible."""
+    if not fs.path(kubeconfig_path).exists():
+        printf("Kubeconfig not found at %s. Has the cluster been bootstrapped?\n\n", kubeconfig_path)
+        return False
+    k8s_client = get_k8s_client(kubeconfig_path)
+    print_cluster_summary(k8s_client, kubeconfig_path)
+    return True
+
 # ---------------------------------------------------------------------------
 # Scale Operations (add_node and remove_node)
 # ---------------------------------------------------------------------------
 
 def add_node(cp_node, worker_node, kubeconfig_path):
-    """Joins a worker node to the existing cluster and asserts readiness natively."""
+    """Joins a worker node to the existing cluster and asserts readiness via k8s.wait_for."""
     printf("\n=== Adding Node %s to Cluster ===\n\n", worker_node)
 
     # 1. Verify kubeadm is ready on the worker
     printf("[1/3] Checking worker node %s readiness...\n", worker_node)
     check_res = lima.exec(worker_node, "kubeadm version -o short 2>/dev/null && systemctl is-active containerd 2>/dev/null")
     if not check_res.ok:
-        fail("Node %s is not prepared. Start the machine via ./setup.star first." % worker_node)
+        fail("Node %s is not prepared. Start the machine via setup action first." % worker_node)
 
     # 2. Generate join token from control plane
     printf("[2/3] Generating join token from control plane %s...\n", cp_node)
@@ -268,23 +193,13 @@ def add_node(cp_node, worker_node, kubeconfig_path):
     if not res.ok:
         fail("Failed joining node %s: %s" % (worker_node, res.stderr))
 
-    # 4. Wait for node to enter Ready state via native k8s client
-    printf("Waiting for node %s to report Ready status via native k8s API...\n", worker_node)
+    # 4. Wait for node to enter Ready state via native k8s.wait_for
+    printf("Waiting for node %s to report Ready status via native k8s.wait_for...\n", worker_node)
     k8s_client = get_k8s_client(kubeconfig_path)
-    ready = False
-    for attempt in range(18):
-        node_obj = k8s_client.get("node", worker_node)
-        for cond in node_obj.status.conditions:
-            if cond.type == "Ready" and cond.status == "True":
-                ready = True
-                break
-        if ready:
-            printf("  [SUCCESS] Node %s is Ready!\n", worker_node)
-            break
-        time.sleep("10s")
-
-    if not ready:
-        fail("Timed out waiting for node %s to report Ready status." % worker_node)
+    res = k8s_client.wait_for("node", worker_node, condition = "ready", timeout = "3m")
+    if not res.ready:
+        fail("Timed out waiting for node %s to report Ready status: %s" % (worker_node, res.message))
+    printf("  [SUCCESS] Node %s is Ready!\n", worker_node)
 
     # Print updated node table natively
     print_cluster_summary(k8s_client, kubeconfig_path)
@@ -355,38 +270,11 @@ def bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out):
     # Step 4: Install CNI network plugin
     install_cni(k8s_client, cni_type)
 
-    # Step 5: Assert cluster readiness over native API
-    assert_cluster_readiness(k8s_client, len(all_nodes))
+    # Step 5: Assert cluster readiness over native API via k8s.wait_for
+    assert_cluster_readiness(k8s_client, all_nodes)
 
     # Deploy smoke test workload to verify scheduler & CNI
     deploy_smoke_test_workload(k8s_client)
 
     # Summary
     print_cluster_summary(k8s_client, kubeconfig_out)
-
-# ---------------------------------------------------------------------------
-# CLI Entrypoint
-# ---------------------------------------------------------------------------
-
-def main():
-    opts = args.parse()
-
-    action = opts.action.lower()
-    cp_node = opts.cp
-    workers = [w.strip() for w in opts.workers if w.strip()]
-    target_node = opts.node
-    pod_cidr = getattr(opts, "pod_cidr", "10.244.0.0/16")
-    cni_type = opts.cni.lower()
-    kubeconfig_out = opts.kubeconfig
-
-    if action == "bootstrap":
-        bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out)
-    elif action in ["add-node", "join"]:
-        add_node(cp_node, target_node, kubeconfig_out)
-    elif action in ["remove-node", "drain"]:
-        remove_node(target_node, kubeconfig_out)
-    elif action == "status":
-        k8s_client = get_k8s_client(kubeconfig_out)
-        print_cluster_summary(k8s_client, kubeconfig_out)
-    else:
-        fail("Unknown action: " + action + ". Supported actions: bootstrap, add-node, remove-node, status")

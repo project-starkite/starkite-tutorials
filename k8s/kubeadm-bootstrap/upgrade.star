@@ -1,51 +1,15 @@
-#!/usr/bin/env kite --allow-all
 # upgrade.star - Day-2 Zero-Downtime Rolling Cluster Upgrades
 #
 # Automates the canonical upstream Kubernetes upgrade ceremony:
 # 1. Control Plane Upgrade: Upgrades kubeadm, runs kubeadm upgrade apply, restarts kubelet
 # 2. Sequential Worker Node Upgrades: Cordon -> Drain -> kubeadm upgrade node -> kubelet restart -> Uncordon
-# 3. Health Gates: Verifies each node returns to Ready before upgrading the next node
-#
-# Usage:
-#   # Upgrade cluster to target version:
-#   kite run ./upgrade.star --version 1.31.2
+# 3. Health Gates: Verifies each node returns to Ready using native k8s.wait_for
 
 load("time", "time")
 load("./lima.star", "lima")
 load("./common.star", "common")
 
 get_k8s_client = common.get_k8s_client
-
-# ---------------------------------------------------------------------------
-# CLI Argument Schema
-# ---------------------------------------------------------------------------
-args.string(
-    "version",
-    shorthand = "v",
-    default = "1.31.2",
-    help = "Target Kubernetes version for upgrade (e.g. 1.31.2)",
-)
-
-args.string(
-    "cp",
-    default = "k8s-cp",
-    help = "Control plane node machine name",
-)
-
-args.list(
-    "workers",
-    shorthand = "w",
-    default = ["k8s-worker-1", "k8s-worker-2"],
-    item_type = "string",
-    help = "Worker node hostnames to upgrade sequentially (comma-separated or repeatable)",
-)
-
-args.string(
-    "kubeconfig",
-    shorthand = "k",
-    default = lima.get_kubeconfig_path(),
-    help = "Path to admin kubeconfig file",
-)
 
 def wait_for_apt_lock(node, max_retries = 30):
     """Waits for any background package manager locks to release on a node."""
@@ -144,34 +108,18 @@ def upgrade_worker_node(cp_node, worker_node, version, k8s_client):
     if not res.ok:
         fail("Failed upgrading kubelet on %s: %s" % (worker_node, res.stderr))
 
-    # 5. Uncordon & Health Gate via native k8s module
-    printf("  [5/5] Uncordoning %s and asserting Ready status via native k8s API...\n", worker_node)
+    # 5. Uncordon & Health Gate via native k8s.wait_for construct
+    printf("  [5/5] Uncordoning %s and asserting Ready status via native k8s.wait_for...\n", worker_node)
     k8s_client.uncordon(worker_node)
 
-    ready = False
-    for attempt in range(18):
-        node_obj = k8s_client.get("node", worker_node)
-        for cond in node_obj.status.conditions:
-            if cond.type == "Ready" and cond.status == "True":
-                ready = True
-                break
-        if ready:
-            break
-        time.sleep("10s")
-
-    if not ready:
-        fail("Health check failed: Node %s did not return to Ready state." % worker_node)
+    res = k8s_client.wait_for("node", worker_node, condition = "ready", timeout = "3m")
+    if not res.ready:
+        fail("Health check failed: Node %s did not return to Ready state: %s" % (worker_node, res.message))
 
     printf("  [SUCCESS] Worker %s upgraded to v%s and returned to service.\n\n", worker_node, version)
 
-def main():
-    opts = args.parse()
-
-    target_version = opts.version
-    cp_node = opts.cp
-    workers = [w.strip() for w in opts.workers if w.strip()]
-    kubeconfig_path = opts.kubeconfig
-
+def upgrade_cluster(cp_node, workers, target_version, kubeconfig_path):
+    """Executes the full upstream rolling upgrade across control plane and worker nodes."""
     k8s_client = get_k8s_client(kubeconfig_path)
 
     printf("\n=== Starkite Upstream Rolling Upgrade ===\n")
