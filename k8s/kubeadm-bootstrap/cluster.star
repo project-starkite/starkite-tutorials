@@ -1,21 +1,23 @@
 #!/usr/bin/env kite --allow-all
-# bootstrap.star - Day-0 & Day-1 Upstream Kubernetes Cluster Bootstrap
+# cluster.star - Upstream Kubernetes Cluster Lifecycle Management
 #
-# Automates the end-to-end initialization of an upstream Kubernetes cluster using kubeadm:
-# 1. Pre-flight verification across control plane and worker nodes
-# 2. Control plane initialization via `kubeadm init` (with localhost SAN injection)
-# 3. Kubeconfig retrieval and local artifact emission (saved in ~/.starkite/tutorials/k8s/)
-# 4. Dynamic cluster join command extraction and concurrent worker join (via concur.map)
-# 5. CNI network plugin installation (Flannel / Calico)
-# 6. Cluster readiness assertion (polling until all nodes reach Ready)
-# 7. Smoke-test application deployment from smoke-test.yaml
+# Provides end-to-end cluster lifecycle operations using kubeadm and native Starkite primitives:
+# - Day-0 & Day-1: Bootstrap control plane, join workers, apply CNI, deploy smoke test
+# - Day-2 Scaling: Dynamically add worker nodes or cordons, drains, and decommission nodes
+# - Topology: Inspect cluster node status and health natively
 #
 # Usage:
-#   # 1. Bootstrap cluster (default nodes: k8s-cp, k8s-worker-1, k8s-worker-2):
-#   kite run ./bootstrap.star
+#   # 1. Bootstrap cluster (default: k8s-cp, k8s-worker-1, k8s-worker-2):
+#   kite run ./cluster.star
 #
-#   # 2. Specify custom node names or CNI:
-#   kite run ./bootstrap.star --cp k8s-cp --workers k8s-worker-1,k8s-worker-2 --cni flannel
+#   # 2. Add / scale out a new worker node:
+#   kite run ./cluster.star --action add-node --node k8s-worker-3
+#
+#   # 3. Safely decommission / drain a worker node:
+#   kite run ./cluster.star --action remove-node --node k8s-worker-2
+#
+#   # 4. Query live cluster node status:
+#   kite run ./cluster.star --action status
 
 load("concur", "concur")
 load("time", "time")
@@ -29,6 +31,14 @@ get_k8s_client = common.get_k8s_client
 # CLI Argument Schema
 # ---------------------------------------------------------------------------
 args.string(
+    "action",
+    shorthand = "a",
+    default = "bootstrap",
+    choices = ["bootstrap", "add-node", "remove-node", "join", "drain", "status"],
+    help = "Cluster action: bootstrap, add-node, remove-node, status",
+)
+
+args.string(
     "cp",
     default = "k8s-cp",
     help = "Control plane node machine name",
@@ -39,7 +49,14 @@ args.list(
     shorthand = "w",
     default = ["k8s-worker-1", "k8s-worker-2"],
     item_type = "string",
-    help = "Worker node hostnames (comma-separated or repeatable)",
+    help = "Worker node hostnames for bootstrap (comma-separated or repeatable)",
+)
+
+args.string(
+    "node",
+    shorthand = "n",
+    default = "k8s-worker-2",
+    help = "Target worker node hostname to add or remove",
 )
 
 args.string(
@@ -58,12 +75,13 @@ args.string(
 
 args.string(
     "kubeconfig",
+    shorthand = "k",
     default = lima.get_kubeconfig_path(),
-    help = "Path to write the cluster admin kubeconfig",
+    help = "Path to cluster admin kubeconfig file",
 )
 
 # ---------------------------------------------------------------------------
-# Core Bootstrap Steps
+# Core Lifecycle Functions
 # ---------------------------------------------------------------------------
 
 def init_control_plane(cp_node, pod_cidr):
@@ -117,12 +135,10 @@ def fetch_and_save_kubeconfig(cp_node, output_path):
 
 def get_join_command(cp_node):
     """Generates and retrieves a standard kubeadm join command with token."""
-    printf("[3/5] Generating worker join token on %s...\n", cp_node)
     res = lima.exec(cp_node, "kubeadm token create --print-join-command")
     if not res.ok:
         fail("Failed generating join token on %s: %s" % (cp_node, res.stderr))
-    join_cmd = res.stdout.strip()
-    return join_cmd
+    return res.stdout.strip()
 
 def join_worker(worker_node, join_cmd):
     """Joins a worker node to the cluster if not already joined."""
@@ -195,7 +211,7 @@ def deploy_smoke_test_workload(k8s_client):
 
 def print_cluster_summary(k8s_client, kubeconfig_path):
     """Prints a structured summary of the live cluster nodes and status."""
-    printf("\n=== Cluster Bootstrap Complete ===\n\n")
+    printf("\n=== Cluster Status Summary ===\n\n")
     printf("%-16s %-10s %-16s %-12s %-16s\n", "NAME", "STATUS", "ROLES", "VERSION", "INTERNAL-IP")
 
     nodes = k8s_client.list("node")
@@ -224,19 +240,89 @@ def print_cluster_summary(k8s_client, kubeconfig_path):
 
         printf("%-16s %-10s %-16s %-12s %-16s\n", name, status_str, role_str, version, internal_ip)
 
-    printf("\nTo interact with your new cluster locally:\n")
+    printf("\nTo interact with your cluster locally:\n")
     printf("  export KUBECONFIG=%s\n", kubeconfig_path)
     printf("  kubectl get pods -A\n\n")
 
-def main():
-    opts = args.parse()
+# ---------------------------------------------------------------------------
+# Scale Operations (add_node and remove_node)
+# ---------------------------------------------------------------------------
 
-    cp_node = opts.cp
-    workers = [w.strip() for w in opts.workers if w.strip()]
-    pod_cidr = getattr(opts, "pod_cidr", "10.244.0.0/16")
-    cni_type = opts.cni.lower()
-    kubeconfig_out = opts.kubeconfig
+def add_node(cp_node, worker_node, kubeconfig_path):
+    """Joins a worker node to the existing cluster and asserts readiness natively."""
+    printf("\n=== Adding Node %s to Cluster ===\n\n", worker_node)
 
+    # 1. Verify kubeadm is ready on the worker
+    printf("[1/3] Checking worker node %s readiness...\n", worker_node)
+    check_res = lima.exec(worker_node, "kubeadm version -o short 2>/dev/null && systemctl is-active containerd 2>/dev/null")
+    if not check_res.ok:
+        fail("Node %s is not prepared. Start the machine via ./setup.star first." % worker_node)
+
+    # 2. Generate join token from control plane
+    printf("[2/3] Generating join token from control plane %s...\n", cp_node)
+    join_cmd = get_join_command(cp_node)
+
+    # 3. Join the node
+    printf("[3/3] Joining %s to cluster...\n", worker_node)
+    res = lima.exec(worker_node, join_cmd + " --node-name=" + worker_node + " --ignore-preflight-errors=all")
+    if not res.ok:
+        fail("Failed joining node %s: %s" % (worker_node, res.stderr))
+
+    # 4. Wait for node to enter Ready state via native k8s client
+    printf("Waiting for node %s to report Ready status via native k8s API...\n", worker_node)
+    k8s_client = get_k8s_client(kubeconfig_path)
+    ready = False
+    for attempt in range(18):
+        node_obj = k8s_client.get("node", worker_node)
+        for cond in node_obj.status.conditions:
+            if cond.type == "Ready" and cond.status == "True":
+                ready = True
+                break
+        if ready:
+            printf("  [SUCCESS] Node %s is Ready!\n", worker_node)
+            break
+        time.sleep("10s")
+
+    if not ready:
+        fail("Timed out waiting for node %s to report Ready status." % worker_node)
+
+    # Print updated node table natively
+    print_cluster_summary(k8s_client, kubeconfig_path)
+
+def remove_node(worker_node, kubeconfig_path):
+    """Safely drains and removes a worker node from the cluster using native k8s module."""
+    printf("\n=== Decommissioning Node %s ===\n\n", worker_node)
+    k8s_client = get_k8s_client(kubeconfig_path)
+
+    # 1. Cordon the node natively
+    printf("[1/4] Cordoning node %s via native k8s module...\n", worker_node)
+    k8s_client.cordon(worker_node)
+    printf("  [SUCCESS] Node %s marked SchedulingDisabled.\n", worker_node)
+
+    # 2. Gracefully drain existing pods natively
+    printf("[2/4] Gracefully draining existing pods from %s...\n", worker_node)
+    k8s_client.drain(worker_node, force = True, ignore_daemonsets = True)
+    printf("  [SUCCESS] Pods evicted and rescheduled to remaining nodes.\n")
+
+    # 3. Delete node object from the Kubernetes API natively
+    printf("[3/4] Deleting node %s from cluster via native k8s API...\n", worker_node)
+    k8s_client.delete("node", worker_node)
+    printf("  [SUCCESS] Node %s removed from Kubernetes registry.\n", worker_node)
+
+    # 4. Reset kubeadm on the worker node
+    printf("[4/4] Resetting kubeadm state on %s...\n", worker_node)
+    lima.exec(worker_node, "kubeadm reset -f >/dev/null 2>&1 || true")
+    printf("  [SUCCESS] Node %s reset.\n", worker_node)
+
+    # Print updated node table natively
+    print_cluster_summary(k8s_client, kubeconfig_path)
+
+# ---------------------------------------------------------------------------
+# Bootstrap Workflow
+# ---------------------------------------------------------------------------
+
+def bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out):
+    """Executes the full Day-0 and Day-1 upstream cluster bootstrap sequence."""
     all_nodes = [cp_node] + workers
 
     printf("\n=== Starkite Upstream Kubeadm Bootstrap ===\n")
@@ -261,6 +347,7 @@ def main():
     k8s_client = get_k8s_client(kubeconfig_out)
 
     # Step 3: Concurrently join all worker nodes
+    printf("[3/5] Generating worker join token on %s...\n", cp_node)
     join_cmd = get_join_command(cp_node)
     printf("  Joining %d worker nodes concurrently...\n", len(workers))
     concur.map(workers, lambda w: join_worker(w, join_cmd))
@@ -276,3 +363,30 @@ def main():
 
     # Summary
     print_cluster_summary(k8s_client, kubeconfig_out)
+
+# ---------------------------------------------------------------------------
+# CLI Entrypoint
+# ---------------------------------------------------------------------------
+
+def main():
+    opts = args.parse()
+
+    action = opts.action.lower()
+    cp_node = opts.cp
+    workers = [w.strip() for w in opts.workers if w.strip()]
+    target_node = opts.node
+    pod_cidr = getattr(opts, "pod_cidr", "10.244.0.0/16")
+    cni_type = opts.cni.lower()
+    kubeconfig_out = opts.kubeconfig
+
+    if action == "bootstrap":
+        bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out)
+    elif action in ["add-node", "join"]:
+        add_node(cp_node, target_node, kubeconfig_out)
+    elif action in ["remove-node", "drain"]:
+        remove_node(target_node, kubeconfig_out)
+    elif action == "status":
+        k8s_client = get_k8s_client(kubeconfig_out)
+        print_cluster_summary(k8s_client, kubeconfig_out)
+    else:
+        fail("Unknown action: " + action + ". Supported actions: bootstrap, add-node, remove-node, status")

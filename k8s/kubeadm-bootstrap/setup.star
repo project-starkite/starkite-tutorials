@@ -130,7 +130,7 @@ def main():
             printf("  • %-14s (%s)  IP: %-15s  Status: Ready for kubeadm\n", node, role, ip)
 
         printf("\nNext step: Run cluster bootstrap:\n")
-        printf("  kite run ./bootstrap.star --cp %s\n\n", cp_node)
+        printf("  kite run ./cluster.star --cp %s\n\n", cp_node)
 
     elif action == "status":
         print("Querying machine status:")
