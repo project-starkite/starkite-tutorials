@@ -4,6 +4,7 @@
 # - Machine specification generation with embedded OS and containerd/kubeadm provisioning
 # - Instance query and JSON inspection via `limactl list --format json`
 # - Instance lifecycle management: start, stop, delete, and shell execution
+# - Host and guest package maintenance: apt updates with native lock timeouts and service restarts
 # - Isolates all runtime artifacts into ~/.starkite/tutorials/k8s/ to avoid repository leakage
 # - Pure Starkite primitives: native os.which, os.try_exec, and fs.path
 
@@ -125,3 +126,23 @@ def exec(node, cmd, sudo = True):
     else:
         args = ["shell", node, "bash", "-c", cmd]
     return os.try_exec("limactl", args)
+
+def restart_service(node, service):
+    """Restarts a systemd service inside the Lima VM."""
+    res = exec(node, "systemctl daemon-reload && systemctl restart " + service)
+    if not res.ok:
+        fail("Failed restarting service %s on %s: %s" % (service, node, res.stderr))
+    return res
+
+def upgrade_packages(node, packages, version):
+    """Upgrades specific held apt packages inside the Lima VM using native apt lock timeouts."""
+    pkgs = " ".join(["%s=%s-*" % (p, version) for p in packages])
+    cmd = (
+        "export DEBIAN_FRONTEND=noninteractive && " +
+        "apt-get update -qq && " +
+        "apt-get install -y -qq -o DPkg::Lock::Timeout=60 --allow-change-held-packages %s >/dev/null"
+    ) % pkgs
+    res = exec(node, cmd)
+    if not res.ok:
+        fail("Failed upgrading packages [%s] on %s: %s" % (pkgs, node, res.stderr))
+    return res

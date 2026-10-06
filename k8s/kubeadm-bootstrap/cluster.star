@@ -3,6 +3,7 @@
 # Provides core cluster operations using kubeadm and native Starkite primitives:
 # - Day-0 & Day-1: Bootstrap control plane, join workers, apply CNI, deploy smoke test
 # - Day-2 Scaling: Dynamically add worker nodes or cordon, drain, and decommission nodes
+# - Day-2 Rolling Upgrade: Unified in-place upgrade for control plane and worker nodes
 # - Readiness Verification: Uses native k8s.wait_for construct to assert Ready condition
 # - Topology & Health: Inspect cluster node status and health natively
 
@@ -125,40 +126,47 @@ def deploy_smoke_test_workload(k8s_client):
     k8s_client.apply(manifest, force = True)
     printf("  [SUCCESS] Smoke-test workload applied natively via k8s module.\n")
 
-def print_cluster_summary(k8s_client, kubeconfig_path):
-    """Prints a structured summary of the live cluster nodes and status."""
-    printf("\n=== Cluster Status Summary ===\n\n")
-    printf("%-16s %-10s %-16s %-12s %-16s\n", "NAME", "STATUS", "ROLES", "VERSION", "INTERNAL-IP")
+def print_cluster_nodes(k8s_client, kubeconfig_path = None):
+    """Renders a structured cluster node table directly from the Kubernetes API."""
+    printf("\n%-16s %-10s %-16s %-12s %-16s\n", "NAME", "STATUS", "ROLES", "VERSION", "INTERNAL-IP")
+    printf("%-16s %-10s %-16s %-12s %-16s\n", "----", "------", "-----", "-------", "-----------")
 
     nodes = k8s_client.list("node")
     for n in nodes:
         name = n.metadata.name
         version = n.status.nodeInfo.kubeletVersion
 
+        # Extract roles from label keys
+        labels = getattr(n.metadata, "labels", {})
         roles = []
-        for label_key in n.metadata.labels:
-            if "node-role.kubernetes.io/" in label_key:
-                role_name = label_key.split("/")[1]
-                roles.append(role_name)
+        if labels:
+            for k in labels:
+                if k.startswith("node-role.kubernetes.io/"):
+                    roles.append(k.split("/")[1])
         role_str = ",".join(roles) if len(roles) > 0 else "<none>"
 
+        # Determine Ready condition
         status_str = "NotReady"
-        for cond in n.status.conditions:
+        for cond in getattr(n.status, "conditions", []):
             if cond.type == "Ready" and cond.status == "True":
                 status_str = "Ready"
                 break
 
+        # Extract internal IP
         internal_ip = "unknown"
-        for addr in n.status.addresses:
+        for addr in getattr(n.status, "addresses", []):
             if addr.type == "InternalIP":
                 internal_ip = addr.address
                 break
 
         printf("%-16s %-10s %-16s %-12s %-16s\n", name, status_str, role_str, version, internal_ip)
 
-    printf("\nTo interact with your cluster locally:\n")
-    printf("  export KUBECONFIG=%s\n", kubeconfig_path)
-    printf("  kubectl get pods -A\n\n")
+    if kubeconfig_path:
+        printf("\nTo interact with your cluster locally:\n")
+        printf("  export KUBECONFIG=%s\n", kubeconfig_path)
+        printf("  kubectl get pods -A\n\n")
+    else:
+        print("")
 
 def show_cluster_status(kubeconfig_path):
     """Displays cluster summary if kubeconfig is present and api-server is accessible."""
@@ -166,7 +174,7 @@ def show_cluster_status(kubeconfig_path):
         printf("Kubeconfig not found at %s. Has the cluster been bootstrapped?\n\n", kubeconfig_path)
         return False
     k8s_client = get_k8s_client(kubeconfig_path)
-    print_cluster_summary(k8s_client, kubeconfig_path)
+    print_cluster_nodes(k8s_client, kubeconfig_path)
     return True
 
 # ---------------------------------------------------------------------------
@@ -202,7 +210,7 @@ def add_node(cp_node, worker_node, kubeconfig_path):
     printf("  [SUCCESS] Node %s is Ready!\n", worker_node)
 
     # Print updated node table natively
-    print_cluster_summary(k8s_client, kubeconfig_path)
+    print_cluster_nodes(k8s_client, kubeconfig_path)
 
 def remove_node(worker_node, kubeconfig_path):
     """Safely drains and removes a worker node from the cluster using native k8s module."""
@@ -230,7 +238,70 @@ def remove_node(worker_node, kubeconfig_path):
     printf("  [SUCCESS] Node %s reset.\n", worker_node)
 
     # Print updated node table natively
-    print_cluster_summary(k8s_client, kubeconfig_path)
+    print_cluster_nodes(k8s_client, kubeconfig_path)
+
+# ---------------------------------------------------------------------------
+# Rolling Upgrade Operations (upgrade_node and upgrade_cluster)
+# ---------------------------------------------------------------------------
+
+def upgrade_node(node, version, k8s_client, is_control_plane = False):
+    """Upgrades Kubernetes components on a single node (control plane or worker)."""
+    role = "Control Plane" if is_control_plane else "Worker Node"
+    printf("\n=== Upgrading %s %s to v%s ===\n", role, node, version)
+
+    # 1. Cordon & Drain (for worker nodes)
+    if not is_control_plane:
+        printf("  [1/4] Cordoning and draining %s...\n", node)
+        k8s_client.cordon(node)
+        k8s_client.drain(node, force = True, ignore_daemonsets = True)
+
+    # 2. Upgrade kubeadm binary and execute upgrade plan
+    printf("  [2/4] Upgrading kubeadm package and executing upgrade plan...\n")
+    lima.upgrade_packages(node, ["kubeadm"], version)
+
+    upgrade_cmd = ("kubeadm upgrade apply v%s -y" % version) if is_control_plane else "kubeadm upgrade node"
+    res = lima.exec(node, upgrade_cmd)
+    if not res.ok:
+        fail("Kubeadm upgrade failed on %s: %s" % (node, res.stderr))
+
+    # 3. Upgrade kubelet and kubectl packages, then restart kubelet
+    printf("  [3/4] Upgrading kubelet and kubectl packages on %s...\n", node)
+    lima.upgrade_packages(node, ["kubelet", "kubectl"], version)
+    lima.restart_service(node, "kubelet")
+
+    # 4. Uncordon (if worker) and assert Ready state via k8s.wait_for
+    if not is_control_plane:
+        printf("  [4/4] Uncordoning %s and asserting Ready state via k8s.wait_for...\n", node)
+        k8s_client.uncordon(node)
+    else:
+        printf("  [4/4] Asserting %s Ready state via k8s.wait_for...\n", node)
+
+    res = k8s_client.wait_for("node", node, condition = "ready", timeout = "3m")
+    if not res.ready:
+        fail("Health check failed: Node %s did not return to Ready state: %s" % (node, res.message))
+
+    printf("  [SUCCESS] %s %s upgraded to v%s and Ready.\n", role, node, version)
+
+def upgrade_cluster(cp_node, workers, target_version, kubeconfig_path):
+    """Executes the full upstream rolling upgrade across control plane and worker nodes."""
+    k8s_client = get_k8s_client(kubeconfig_path)
+
+    printf("\n=== Starkite Upstream Rolling Upgrade ===\n")
+    printf("Driver         : lima\n")
+    printf("Target Version : v%s\n", target_version)
+    printf("Control Plane  : %s\n", cp_node)
+    printf("Workers        : %s\n", ", ".join(workers))
+
+    # 1. Upgrade Control Plane
+    upgrade_node(cp_node, target_version, k8s_client, is_control_plane = True)
+
+    # 2. Sequentially upgrade worker nodes with health verification gates
+    printf("\n=== Sequentially Upgrading Worker Nodes ===\n")
+    for w in workers:
+        upgrade_node(w, target_version, k8s_client, is_control_plane = False)
+
+    printf("\n=== Cluster Rolling Upgrade Complete ===\n")
+    print_cluster_nodes(k8s_client, kubeconfig_path)
 
 # ---------------------------------------------------------------------------
 # Bootstrap Workflow
@@ -277,4 +348,4 @@ def bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out):
     deploy_smoke_test_workload(k8s_client)
 
     # Summary
-    print_cluster_summary(k8s_client, kubeconfig_out)
+    print_cluster_nodes(k8s_client, kubeconfig_out)

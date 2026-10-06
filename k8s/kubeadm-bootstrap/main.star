@@ -34,7 +34,6 @@
 load("./lima.star", "lima")
 load("./setup.star", "setup")
 load("./cluster.star", "cluster")
-load("./upgrade.star", "upgrade")
 
 # ---------------------------------------------------------------------------
 # Consolidated CLI Argument Schema
@@ -157,7 +156,7 @@ def main():
         cluster.remove_node(target_node, kubeconfig_out)
 
     elif action == "upgrade":
-        upgrade.upgrade_cluster(cp_node, workers, k8s_ver, kubeconfig_out)
+        cluster.upgrade_cluster(cp_node, workers, k8s_ver, kubeconfig_out)
 
     elif action == "status":
         printf("\n=== Starkite Kubeadm Environment Status ===\n\n")

@@ -28,7 +28,7 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
             │                         │                               │
             └────────────►     --action upgrade      ◄────────────────┘
                                       │
-                                 upgrade.star
+                                 cluster.star
                          (rolling in-place upgrade)
 ```
 
@@ -206,11 +206,10 @@ To permanently destroy all instances and clean up runtime manifests:
 k8s/kubeadm-bootstrap/
 ├── main.star                   # Unified CLI entrypoint aggregating all flags and lifecycle actions
 ├── lima-machine-template.yaml  # Go text/template specification for Lima cloud-init VMs
-├── lima.star                   # Lima VM abstraction: native os.try_exec, os.which, and fs.path
+├── lima.star                   # Lima VM abstraction: VM lifecycle, guest packages, native OS calls
 ├── common.star                 # Cross-node connectivity checks and Kubernetes client factory
-├── setup.star                  # Module: Machine launching and embedded OS/package provisioning
-├── cluster.star                # Module: Kubeadm bootstrap, worker scaling, and k8s.wait_for readiness
-├── upgrade.star                # Module: In-place zero-downtime rolling upgrades with health gates
+├── setup.star                  # Module: Machine launching, provisioning, status, stop, and destroy
+├── cluster.star                # Module: Kubeadm bootstrap, scaling, rolling upgrades, and k8s.wait_for
 └── smoke-test.yaml             # Declarative workload manifest used for cluster verification
 ```
 
