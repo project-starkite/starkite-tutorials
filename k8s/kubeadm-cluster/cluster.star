@@ -316,7 +316,7 @@ def bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out):
     """Executes the full Day-0 and Day-1 upstream cluster bootstrap sequence."""
     all_nodes = [cp_node] + workers
 
-    printf("\n=== Starkite Upstream Kubeadm Bootstrap ===\n")
+    printf("\n=== Starkite Upstream Kubeadm Cluster Setup ===\n")
     printf("Driver         : lima\n")
     printf("Control Plane  : %s\n", cp_node)
     printf("Workers        : %s\n", ", ".join(workers))

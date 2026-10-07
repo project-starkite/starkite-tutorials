@@ -2,18 +2,18 @@
 # main.star - Unified CLI Entrypoint for Upstream Kubernetes Cluster Lifecycle
 #
 # Aggregates all CLI operations for the upstream Kubernetes kubeadm cluster:
-# - Machine Provisioning: Launch & configure Lima VMs with containerd & kubeadm (action=setup)
-# - Cluster Bootstrap: Day-0 & Day-1 kubeadm init, worker joins, CNI, smoke test (action=bootstrap)
+# - Machine Infrastructure Bootstrap: Launch & configure Lima VMs with containerd & kubeadm (action=bootstrap)
+# - Cluster Setup: Day-0 & Day-1 kubeadm init, worker joins, CNI, smoke test (action=setup-kube)
 # - Node Scaling: Day-2 dynamic worker join (action=add-node) and decommissioning (action=remove-node)
 # - Rolling Upgrade: Day-2 in-place zero-downtime cluster upgrade (action=upgrade)
 # - Inspection & Teardown: Unified status check, VM stop, and destroy actions
 #
 # Usage:
-#   # 1. Provision and start virtual machines:
-#   ./main.star --action setup
-#
-#   # 2. Bootstrap upstream Kubernetes cluster:
+#   # 1. Bootstrap virtual machines and OS infrastructure:
 #   ./main.star --action bootstrap
+#
+#   # 2. Setup upstream Kubernetes cluster:
+#   ./main.star --action setup-kube
 #
 #   # 3. Query combined machine and cluster health:
 #   ./main.star --action status
@@ -43,8 +43,8 @@ args.string(
     shorthand = "a",
     default = "status",
     choices = [
-        "setup", "start",
-        "bootstrap",
+        "bootstrap", "start",
+        "setup-kube", "deploy-kube",
         "add-node", "join",
         "remove-node", "drain",
         "upgrade",
@@ -52,14 +52,14 @@ args.string(
         "stop",
         "destroy",
     ],
-    help = "Action: setup, bootstrap, add-node, remove-node, upgrade, status, stop, destroy",
+    help = "Action: bootstrap, setup-kube, add-node, remove-node, upgrade, status, stop, destroy",
 )
 
 args.string(
     "version",
     shorthand = "v",
     default = "1.31",
-    help = "Kubernetes minor version (e.g. 1.31 for setup) or target version (e.g. 1.31.2 for upgrade)",
+    help = "Kubernetes minor version (e.g. 1.31 for bootstrap) or target version (e.g. 1.31.2 for upgrade)",
 )
 
 args.string(
@@ -87,7 +87,7 @@ args.string(
     "pod-cidr",
     flag = "pod-cidr",
     default = "10.244.0.0/16",
-    help = "Pod network CIDR block for bootstrap",
+    help = "Pod network CIDR block for setup-kube",
 )
 
 args.string(
@@ -122,10 +122,10 @@ def main():
 
     all_nodes = [cp_node] + workers
 
-    if action in ["setup", "start"]:
+    if action in ["bootstrap", "start", "setup"]:
         setup.start_nodes(all_nodes, cp_node)
 
-    elif action == "bootstrap":
+    elif action in ["setup-kube", "deploy-kube", "bootstrap-cluster"]:
         cluster.bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out)
 
     elif action in ["add-node", "join"]:
@@ -152,4 +152,4 @@ def main():
         setup.destroy_nodes(all_nodes)
 
     else:
-        fail("Unknown action: " + action + ". Supported actions: setup, bootstrap, add-node, remove-node, upgrade, status, stop, destroy")
+        fail("Unknown action: " + action + ". Supported actions: bootstrap, setup-kube, add-node, remove-node, upgrade, status, stop, destroy")

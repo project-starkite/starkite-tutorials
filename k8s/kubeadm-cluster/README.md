@@ -21,7 +21,7 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
                            
                   ┌───────────────── main.star ─────────────────┐
                   │                                             │
-      --action setup         --action bootstrap        --action add-node / remove-node
+      --action bootstrap      --action setup-kube      --action add-node / remove-node
             │                         │                               │
        setup.star               cluster.star                     cluster.star
      (Lima VMs & K8s)      (kubeadm init, CNI, smoke)         (k8s.wait_for, cordon)
@@ -44,7 +44,7 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
 
 ## Step 1: Provision Machines & Install Kubeadm
 
-The `setup` action renders machine specifications from `lima-machine-template.yaml` (saved to `~/.starkite/tutorials/k8s/manifests/lima-*.yaml`) using machine sizing defined in `lima-machine-values.yaml`. It separates specifications into two machine classes—control plane and worker—and provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`) with complete system provisioning embedded into Lima's declarative cloud-init specification:
+The `bootstrap` action renders machine specifications from `lima-machine-template.yaml` (saved to `~/.starkite/tutorials/k8s/manifests/lima-*.yaml`) using machine sizing defined in `lima-machine-values.yaml`. It separates specifications into two machine classes—control plane and worker—and provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`) with complete system provisioning embedded into Lima's declarative cloud-init specification:
 * Disables Linux swap (`swapoff -a`, removes swap from `/etc/fstab`).
 * Loads `overlay` and `br_netfilter` kernel modules.
 * Configures sysctl networking (`net.bridge.bridge-nf-call-iptables = 1`, `net.ipv4.ip_forward = 1`).
@@ -53,14 +53,14 @@ The `setup` action renders machine specifications from `lima-machine-template.ya
 
 ```bash
 # Start machines and provision prerequisites via Lima (using default values from lima-machine-values.yaml):
-./main.star --action setup
+./main.star --action bootstrap
 
 # Override machine values using Starkite's variable facility:
 # Via CLI variables:
-kite run ./main.star --action setup --var lima.control_plane.memory_gb=4
+kite run ./main.star --action bootstrap --var lima.control_plane.memory_gb=4
 
 # Via custom values file:
-kite run --var-file=custom-values.yaml ./main.star --action setup
+kite run --var-file=custom-values.yaml ./main.star --action bootstrap
 ```
 
 Verify that all machines are online and report `kubeadm` installed:
@@ -71,9 +71,9 @@ Verify that all machines are online and report `kubeadm` installed:
 
 ---
 
-## Step 2: Bootstrap the Upstream Cluster
+## Step 2: Setup the Upstream Cluster
 
-The `bootstrap` action executes the Day-0 and Day-1 initialization sequence:
+The `setup-kube` action executes the Day-0 and Day-1 initialization sequence:
 1. Verifies bidirectional network connectivity across all nodes (`common.verify_cluster_mesh`).
 2. Executes `kubeadm init --pod-network-cidr=10.244.0.0/16` with localhost SAN injection (`127.0.0.1,localhost`).
 3. Downloads the cluster `admin.conf` to `~/.starkite/tutorials/k8s/kubeconfig`.
@@ -83,12 +83,12 @@ The `bootstrap` action executes the Day-0 and Day-1 initialization sequence:
 7. Deploys the static smoke-test workload (`smoke-test.yaml`) to verify scheduling and networking.
 
 ```bash
-./main.star --action bootstrap
+./main.star --action setup-kube
 ```
 
 **Expected Output:**
 ```text
-=== Starkite Upstream Kubeadm Bootstrap ===
+=== Starkite Upstream Kubeadm Cluster Setup ===
 Driver         : lima
 Control Plane  : k8s-cp
 Workers        : k8s-worker-1, k8s-worker-2
@@ -151,7 +151,7 @@ To provision and join an additional node (`k8s-worker-3`):
 
 ```bash
 # 1. Start the machine instance if not already running:
-./main.star --action setup --workers k8s-worker-3
+./main.star --action bootstrap --workers k8s-worker-3
 
 # 2. Add the worker to the live cluster (health checked via k8s.wait_for):
 ./main.star --action add-node --node k8s-worker-3
@@ -217,8 +217,8 @@ k8s/kubeadm-cluster/
 ├── lima-machine-values.yaml    # Default machine sizing values for control plane and worker nodes
 ├── lima.star                   # Lima VM abstraction: VM lifecycle, guest packages, native OS calls
 ├── common.star                 # Cross-node connectivity checks and Kubernetes client factory
-├── setup.star                  # Module: Machine launching, provisioning, status, stop, and destroy
-├── cluster.star                # Module: Kubeadm bootstrap, scaling, rolling upgrades, and k8s.wait_for
+├── setup.star                  # Module: Machine bootstrapping, provisioning, status, stop, and destroy
+├── cluster.star                # Module: Kubeadm cluster setup, scaling, rolling upgrades, and k8s.wait_for
 └── smoke-test.yaml             # Declarative workload manifest used for cluster verification
 ```
 

@@ -60,8 +60,8 @@ def start_nodes(all_nodes, cp_node):
         role = "Control Plane" if node == cp_node else "Worker Node"
         printf("  • %-14s (%s)  IP: %-15s  Status: Ready for kubeadm\n", node, role, ip)
 
-    printf("\nNext step: Run cluster bootstrap:\n")
-    printf("  ./main.star --action bootstrap --cp %s\n\n", cp_node)
+    printf("\nNext step: Run cluster setup:\n")
+    printf("  ./main.star --action setup-kube --cp %s\n\n", cp_node)
 
 def show_machine_status(all_nodes):
     """Queries and displays host machine status and kubeadm package readiness."""
