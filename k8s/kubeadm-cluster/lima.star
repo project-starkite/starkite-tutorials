@@ -11,6 +11,7 @@
 load("base64", "base64")
 load("json", "json")
 load("template", "template")
+load("yaml", "yaml")
 
 def check_prerequisites():
     """Verifies that limactl is available in PATH using native os.which."""
@@ -39,19 +40,45 @@ def ensure_dirs():
     """Ensures that runtime directories exist using native fs.path.mkdir."""
     fs.path(get_manifests_dir()).mkdir(parents = True)
 
-def generate_manifest(node, cpus = 2, memory_gb = 2, disk_gb = 20, k8s_version = "1.31", template_path = "./lima-machine-template.yaml"):
-    """Generates a Lima YAML instance definition file using externalized lima-machine-template.yaml."""
+def load_default_values():
+    """Loads default configuration from lima-machine-values.yaml if present."""
+    path = "./lima-machine-values.yaml"
+    if fs.path(path).exists():
+        return yaml.file(path).decode().get("lima", {})
+    return {}
+
+def get_control_plane_config():
+    """Returns configuration for the control plane machine."""
+    defaults = load_default_values()
+    cfg = var_dict("lima.control_plane", default = defaults.get("control_plane", {}))
+    return {
+        "cpus": cfg.get("cpus", 2),
+        "memory_gb": cfg.get("memory_gb", 2),
+        "disk_gb": cfg.get("disk_gb", 20),
+        "k8s_version": var_str("lima.k8s_version", defaults.get("k8s_version", "1.31")),
+    }
+
+def get_worker_config():
+    """Returns configuration for worker machines."""
+    defaults = load_default_values()
+    cfg = var_dict("lima.worker", default = defaults.get("worker", {}))
+    return {
+        "cpus": cfg.get("cpus", 2),
+        "memory_gb": cfg.get("memory_gb", 2),
+        "disk_gb": cfg.get("disk_gb", 20),
+        "k8s_version": var_str("lima.k8s_version", defaults.get("k8s_version", "1.31")),
+    }
+
+def generate_manifest(node, config, template_path = "./lima-machine-template.yaml"):
+    """Generates a Lima YAML instance definition file using externalized template and machine config."""
     ensure_dirs()
     manifest_path = "%s/lima-%s.yaml" % (get_manifests_dir(), node)
 
+    ctx = dict(config)
+    ctx["node"] = node
+
     tmpl = template.file(template_path)
-    rendered_yaml = tmpl.render({
-        "node": node,
-        "cpus": cpus,
-        "memory_gb": memory_gb,
-        "disk_gb": disk_gb,
-        "k8s_version": k8s_version,
-    })
+    rendered_yaml = tmpl.render(ctx)
 
     fs.path(manifest_path).write_text(rendered_yaml)
     return manifest_path

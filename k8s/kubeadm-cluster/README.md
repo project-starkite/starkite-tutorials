@@ -44,7 +44,7 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
 
 ## Step 1: Provision Machines & Install Kubeadm
 
-The `setup` action renders machine specifications from `lima-machine-template.yaml` (saved to `~/.starkite/tutorials/k8s/manifests/lima-*.yaml`), provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`), and embeds complete system provisioning directly into Lima's declarative cloud-init specification:
+The `setup` action renders machine specifications from `lima-machine-template.yaml` (saved to `~/.starkite/tutorials/k8s/manifests/lima-*.yaml`) using machine sizing defined in `lima-machine-values.yaml`. It separates specifications into two machine classes—control plane and worker—and provisions 3 machines (`k8s-cp`, `k8s-worker-1`, `k8s-worker-2`) with complete system provisioning embedded into Lima's declarative cloud-init specification:
 * Disables Linux swap (`swapoff -a`, removes swap from `/etc/fstab`).
 * Loads `overlay` and `br_netfilter` kernel modules.
 * Configures sysctl networking (`net.bridge.bridge-nf-call-iptables = 1`, `net.ipv4.ip_forward = 1`).
@@ -52,8 +52,15 @@ The `setup` action renders machine specifications from `lima-machine-template.ya
 * Configures official upstream `pkgs.k8s.io` repository and installs `kubelet`, `kubeadm`, and `kubectl`.
 
 ```bash
-# Start machines and provision prerequisites via Lima:
+# Start machines and provision prerequisites via Lima (using default values from lima-machine-values.yaml):
 ./main.star --action setup
+
+# Override machine values using Starkite's variable facility:
+# Via CLI variables:
+kite run ./main.star --action setup --var lima.control_plane.memory_gb=4
+
+# Via custom values file:
+kite run --var-file=custom-values.yaml ./main.star --action setup
 ```
 
 Verify that all machines are online and report `kubeadm` installed:
@@ -207,6 +214,7 @@ k8s/kubeadm-cluster/
 ├── mod.yaml                    # Starkite executable module manifest
 ├── main.star                   # Unified CLI entrypoint aggregating all flags and lifecycle actions
 ├── lima-machine-template.yaml  # Go text/template specification for Lima cloud-init VMs
+├── lima-machine-values.yaml    # Default machine sizing values for control plane and worker nodes
 ├── lima.star                   # Lima VM abstraction: VM lifecycle, guest packages, native OS calls
 ├── common.star                 # Cross-node connectivity checks and Kubernetes client factory
 ├── setup.star                  # Module: Machine launching, provisioning, status, stop, and destroy

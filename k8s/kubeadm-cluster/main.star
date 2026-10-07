@@ -83,24 +83,6 @@ args.string(
     help = "Target worker node hostname for add-node or remove-node",
 )
 
-args.int(
-    "cpus",
-    default = 2,
-    help = "Virtual CPUs allocated per node",
-)
-
-args.int(
-    "memory",
-    default = 2,
-    help = "RAM in GiB allocated per node",
-)
-
-args.int(
-    "disk",
-    default = 20,
-    help = "Disk space in GiB allocated per node",
-)
-
 args.string(
     "pod-cidr",
     flag = "pod-cidr",
@@ -134,9 +116,6 @@ def main():
     cp_node = opts.cp
     workers = [w.strip() for w in opts.workers if w.strip()]
     target_node = opts.node
-    cpus = opts.cpus
-    memory_gb = opts.memory
-    disk_gb = opts.disk
     pod_cidr = getattr(opts, "pod_cidr", "10.244.0.0/16")
     cni_type = opts.cni.lower()
     kubeconfig_out = opts.kubeconfig
@@ -144,7 +123,7 @@ def main():
     all_nodes = [cp_node] + workers
 
     if action in ["setup", "start"]:
-        setup.start_nodes(all_nodes, cp_node, cpus, memory_gb, disk_gb, k8s_ver)
+        setup.start_nodes(all_nodes, cp_node)
 
     elif action == "bootstrap":
         cluster.bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out)

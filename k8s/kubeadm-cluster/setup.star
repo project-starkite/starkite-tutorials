@@ -6,11 +6,11 @@
 load("concur", "concur")
 load("./lima.star", "lima")
 
-def start_node(node, cpus, memory_gb, disk_gb, k8s_version):
+def start_node(node, config):
     """Generates manifest and starts a Lima node with embedded cloud provisioning."""
     printf("  [%s] Generating machine specification...\n", node)
-    manifest_path = lima.generate_manifest(node, cpus, memory_gb, disk_gb, k8s_version)
-    printf("  [%s] Starting Lima VM (cpus: %d, memory: %dGiB)...\n", node, cpus, memory_gb)
+    manifest_path = lima.generate_manifest(node, config)
+    printf("  [%s] Starting Lima VM (cpus: %d, memory: %dGiB)...\n", node, config["cpus"], config["memory_gb"])
     ok = lima.start(node, manifest_path)
     if not ok:
         fail("Failed starting Lima machine: " + node)
@@ -27,20 +27,29 @@ def verify_node(node):
         printf("  [%s WARNING] Verification: %s\n", node, ver_res.stderr)
         return False
 
-def start_nodes(all_nodes, cp_node, cpus, memory_gb, disk_gb, k8s_ver):
+def start_nodes(all_nodes, cp_node):
     """Launches, provisions, and verifies all Lima machines."""
     lima.check_prerequisites()
 
+    cp_cfg = lima.get_control_plane_config()
+    worker_cfg = lima.get_worker_config()
+
     printf("\n=== Starkite Kubeadm Machine Provisioning ===\n")
     printf("Driver         : lima\n")
-    printf("K8s Version    : %s\n", k8s_ver)
-    printf("Control Plane  : %s\n", cp_node)
-    printf("Target Nodes   : %s\n", ", ".join(all_nodes))
-    printf("Hardware Alloc : %d vCPUs, %d GB RAM per node\n\n", cpus, memory_gb)
+    printf("K8s Version    : %s\n", cp_cfg["k8s_version"])
+    printf("Control Plane  : %s (%d vCPUs, %d GiB RAM, %d GiB disk)\n",
+           cp_node, cp_cfg["cpus"], cp_cfg["memory_gb"], cp_cfg["disk_gb"])
+    workers = [n for n in all_nodes if n != cp_node]
+    if workers:
+        printf("Workers        : %s (%d vCPUs, %d GiB RAM, %d GiB disk per worker)\n\n",
+               ", ".join(workers), worker_cfg["cpus"], worker_cfg["memory_gb"], worker_cfg["disk_gb"])
+    else:
+        printf("Workers        : none\n\n")
 
     print("[1/2] Launching and provisioning Lima machines...")
     for node in all_nodes:
-        start_node(node, cpus, memory_gb, disk_gb, k8s_ver)
+        cfg = cp_cfg if node == cp_node else worker_cfg
+        start_node(node, cfg)
 
     printf("\n[2/2] Verifying node readiness and installed packages...\n")
     concur.map(all_nodes, verify_node)

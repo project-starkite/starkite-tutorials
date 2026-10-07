@@ -1,0 +1,13 @@
+# lima-machine-values.yaml
+# Machine configuration values for Upstream Kubernetes (Kubeadm) cluster
+
+lima:
+  k8s_version: "1.31"
+  control_plane:
+    cpus: 2
+    memory_gb: 2
+    disk_gb: 20
+  worker:
+    cpus: 2
+    memory_gb: 2
+    disk_gb: 20
