@@ -1,4 +1,4 @@
-# Upstream Kubernetes (Kubeadm) Lifecycle & Day-2 Management
+# Provisioning and Operating Upstream Kubernetes with Starkite
 
 This tutorial demonstrates the versatility of **Starkite** as an orchestration engine across multi-layered infrastructure environments—from local virtual machine provisioning to upstream Kubernetes cluster bootstrapping and Day-2 operational workflows.
 
