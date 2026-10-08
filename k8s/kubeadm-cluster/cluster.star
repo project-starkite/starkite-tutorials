@@ -194,7 +194,7 @@ def add_node(cp_node, worker_node, kubeconfig_path):
     printf("[1/3] Checking worker node %s readiness...\n", worker_node)
     check_res = lima.exec(worker_node, "kubeadm version -o short 2>/dev/null && systemctl is-active containerd 2>/dev/null")
     if not check_res.ok:
-        fail("Node %s is not prepared. Start the machine via setup action first." % worker_node)
+        fail("Node %s is not prepared. Start the machine via bootstrap action first." % worker_node)
 
     # 2. Generate join token from control plane
     printf("[2/3] Generating join token from control plane %s...\n", cp_node)

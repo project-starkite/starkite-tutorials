@@ -1,4 +1,4 @@
-# setup.star - Provision Lima VMs and install Kubernetes prerequisites
+# node.star - Provision Lima VMs and install Kubernetes prerequisites
 #
 # Generates declarative Lima YAML specifications (with embedded OS & kubeadm provisioning)
 # and manages virtual machine lifecycles for the upstream Kubernetes cluster.

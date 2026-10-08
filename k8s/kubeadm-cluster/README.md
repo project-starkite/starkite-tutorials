@@ -23,7 +23,7 @@ Starkite demonstrates its versatility by unifying these layers within a single, 
                   │                                             │
       --action bootstrap      --action setup-kube      --action add-node / remove-node
             │                         │                               │
-       setup.star               cluster.star                     cluster.star
+        node.star               cluster.star                     cluster.star
      (Lima VMs & K8s)      (kubeadm init, CNI, smoke)         (k8s.wait_for, cordon)
             │                         │                               │
             └────────────►     --action upgrade      ◄────────────────┘
@@ -217,7 +217,7 @@ k8s/kubeadm-cluster/
 ├── lima-machine-values.yaml    # Default machine sizing values for control plane and worker nodes
 ├── lima.star                   # Lima VM abstraction: VM lifecycle, guest packages, native OS calls
 ├── common.star                 # Cross-node connectivity checks and Kubernetes client factory
-├── setup.star                  # Module: Machine bootstrapping, provisioning, status, stop, and destroy
+├── node.star                   # Module: Machine bootstrapping, provisioning, status, stop, and destroy
 ├── cluster.star                # Module: Kubeadm cluster setup, scaling, rolling upgrades, and k8s.wait_for
 └── smoke-test.yaml             # Declarative workload manifest used for cluster verification
 ```

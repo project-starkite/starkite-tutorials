@@ -32,7 +32,7 @@
 #   ./main.star --action destroy
 
 load("./lima.star", "lima")
-load("./setup.star", "setup")
+load("./node.star", "node")
 load("./cluster.star", "cluster")
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ def main():
     all_nodes = [cp_node] + workers
 
     if action in ["bootstrap", "start", "setup"]:
-        setup.start_nodes(all_nodes, cp_node)
+        node.start_nodes(all_nodes, cp_node)
 
     elif action in ["setup-kube", "deploy-kube", "bootstrap-cluster"]:
         cluster.bootstrap_cluster(cp_node, workers, pod_cidr, cni_type, kubeconfig_out)
@@ -139,17 +139,17 @@ def main():
 
     elif action == "status":
         printf("\n=== Starkite Kubeadm Environment Status ===\n\n")
-        setup.show_machine_status(all_nodes)
+        node.show_machine_status(all_nodes)
         if lima.get_status(cp_node) == "Running":
             cluster.show_cluster_status(kubeconfig_out)
         else:
             printf("Cluster API is offline (control plane %s is not running).\n\n", cp_node)
 
     elif action == "stop":
-        setup.stop_nodes(all_nodes)
+        node.stop_nodes(all_nodes)
 
     elif action == "destroy":
-        setup.destroy_nodes(all_nodes)
+        node.destroy_nodes(all_nodes)
 
     else:
         fail("Unknown action: " + action + ". Supported actions: bootstrap, setup-kube, add-node, remove-node, upgrade, status, stop, destroy")
