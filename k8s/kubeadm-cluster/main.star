@@ -143,7 +143,7 @@ def main():
         if lima.get_status(cp_node) == "Running":
             cluster.show_cluster_status(kubeconfig_out)
         else:
-            printf("Cluster API is offline (control plane %s is not running).\n\n", cp_node)
+            printf("Kubernetes API server is offline (control plane %s is not running).\n\n", cp_node)
 
     elif action == "stop":
         node.stop_nodes(all_nodes)
