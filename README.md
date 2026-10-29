@@ -141,7 +141,7 @@ By default, Starkite operates in `deny-all` mode to prevent unintended host acce
 * `--allow-net`: Grants outbound network and HTTP/socket access.
 * `--allow-fs`: Grants local filesystem read/write access.
 * `--allow-local`: Authorizes local resource binding (stdio, local servers).
-* `--sandbox-net`: Enforces OS kernel-level filesystem isolation (Seatbelt on macOS, Landlock on Linux).
+* `--sandbox-net-allow`: Grants outbound network access (use `--sandbox-net-allow` or `--sandbox-net-allow=*` for full host access, or `--sandbox-net-allow=<endpoint>` for specific destinations).
 * `--allow-all`: Enables all runtime capabilities for development and local testing.
 
 ---
