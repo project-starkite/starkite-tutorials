@@ -110,6 +110,13 @@ Tutorials using Docker and Podman daemon APIs for local container orchestration.
 * [`containers/01-hello-containers.star`](containers/01-hello-containers.star): Daemon ping, endpoint inspection, and engine version querying.
 * [`containers/02-container-exec.star`](containers/02-container-exec.star): Lifecycle management, in-container process execution, and defer cleanup.
 
+### 5. Windows Automation (`windows/`)
+
+Tutorials demonstrating host operations, process management, and service self-healing on Windows.
+
+* [`windows/README.md`](windows/README.md): Detailed walkthrough for Windows service monitoring, backoff recovery, and HTTP health validation.
+* [`windows/service-watchdog.star`](windows/service-watchdog.star): Self-healing watchdog monitoring the Windows Service Control Manager via PowerShell JSON.
+
 ---
 
 ## Running the Examples
