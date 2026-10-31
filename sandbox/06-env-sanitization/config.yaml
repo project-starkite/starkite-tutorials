@@ -1,0 +1,8 @@
+# config.yaml — Environment configuration and forwarding profile
+sandbox:
+  worker-profile:
+    base: sandbox-path
+    env:
+      STAGE: staging
+      API_ENDPOINT: https://internal.service.local
+      HOST_REGION:

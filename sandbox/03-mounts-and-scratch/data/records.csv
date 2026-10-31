@@ -1,0 +1,7 @@
+instance_id,region,cpu_cores,memory_gb,status
+i-01a2b3c4d5,us-east-1,4,16,running
+i-02b3c4d5e6,us-east-1,8,32,running
+i-03c4d5e6f7,us-west-2,2,8,stopped
+i-04d5e6f7a8,us-west-2,16,64,running
+i-05e6f7a8b9,eu-central-1,4,16,running
+i-06f7a8b9c0,eu-central-1,8,32,stopped

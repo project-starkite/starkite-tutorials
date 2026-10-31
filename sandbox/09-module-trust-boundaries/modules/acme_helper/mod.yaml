@@ -1,0 +1,6 @@
+namespace: acme
+name: acme_helper
+version: 1.0.0
+description: Acme helper utilities requiring network egress
+sandbox:
+  network: host

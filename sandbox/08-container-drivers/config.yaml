@@ -1,0 +1,19 @@
+# config.yaml — Ephemeral OCI container sandbox profiles
+sandbox:
+  container-runner:
+    driver: docker
+    image: ghcr.io/project-starkite/starkite:latest
+    max_memory: 512MB
+    timeout: 60s
+    network: none
+    paths:
+      read: ["."]
+
+  podman-runner:
+    driver: podman
+    image: ghcr.io/project-starkite/starkite:latest
+    max_memory: 256MB
+    timeout: 30s
+    network: none
+    paths:
+      read: ["."]

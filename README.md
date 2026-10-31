@@ -117,6 +117,23 @@ Tutorials demonstrating host operations, process management, and service self-he
 * [`windows/README.md`](windows/README.md): Detailed walkthrough for Windows service monitoring, backoff recovery, and HTTP health validation.
 * [`windows/service-watchdog.star`](windows/service-watchdog.star): Self-healing watchdog monitoring the Windows Service Control Manager via PowerShell JSON.
 
+### 6. Zero-Trust Sandboxing & Security Architecture (`sandbox/`)
+
+Comprehensive 10-part tutorial suite demonstrating OS-level kernel isolation, capability profiles, filesystem mounts, in-VM call gates, cross-platform kernel drivers, and agentic AI evaluation.
+
+* [`sandbox/README.md`](sandbox/README.md): Master catalog, security architecture, capability ladder, and execution triad.
+* [`01-zero-trust-ladder/`](sandbox/01-zero-trust-ladder/README.md): Stepping through the 5 capability rungs (`deny-all` to `unconfined`).
+* [`02-native-binary-exec/`](sandbox/02-native-binary-exec/README.md): Direct native binary and Python confinement via `kite exec`.
+* [`03-mounts-and-scratch/`](sandbox/03-mounts-and-scratch/README.md): Granular host mounts (`--sandbox-mount`), tmpfs scratch, and $W\oplus X$ enforcement.
+* [`04-network-confinement/`](sandbox/04-network-confinement/README.md): Network air-gapping, endpoint allowlists, and automated DNS/TLS certificate unveiling.
+* [`05-in-vm-call-gates/`](sandbox/05-in-vm-call-gates/README.md): Fine-grained Starlark API gates (`calls.allow` and `calls.deny`) with deny-first semantics.
+* [`06-env-sanitization/`](sandbox/06-env-sanitization/README.md): 3-tier environment synthesis, ambient secret scrubbing, and `--debug` diagnostics.
+* [`07-cross-platform-drivers/`](sandbox/07-cross-platform-drivers/README.md): Kernel drivers across Linux (Landlock), macOS (Seatbelt), and Windows (AppContainers).
+* [`08-container-drivers/`](sandbox/08-container-drivers/README.md): Ephemeral hardened OCI containers (`podman`, `docker`, `nerdctl`, `gvisor`).
+* [`09-module-trust-boundaries/`](sandbox/09-module-trust-boundaries/README.md): Declarative `mod.yaml` manifests and the Non-Escalation Principle.
+* [`10-agentic-ai-eval/`](sandbox/10-agentic-ai-eval/README.md): Sandboxed evaluation of untrusted AI-generated code and Model Context Protocol (MCP) tool loops.
+
+
 ---
 
 ## Running the Examples

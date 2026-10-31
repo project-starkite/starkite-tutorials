@@ -1,0 +1,23 @@
+# config.yaml — Fine-grained in-VM Starlark call gate policies
+sandbox:
+  ops-read:
+    network: none
+    paths:
+      read: ["."]
+    calls:
+      allow:
+        - "fs.read"
+        - "json.*"
+        - "yaml.*"
+      deny:
+        - "os.exec"
+        - "fs.write"
+
+  ops-admin:
+    base: sandbox-exec
+    exec:
+      allow: ["echo", "git"]
+      deny: ["rm"]
+    calls:
+      deny:
+        - "fs.delete"
