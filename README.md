@@ -86,6 +86,7 @@ Tutorials covering the 3-tier architecture of Starkite's `k8s` module, from reso
 * [`12-multi-protocol-onboarding.star`](k8s/12-multi-protocol-onboarding.star): Multi-protocol tenant onboarding (relational SQL migrations + K8s workloads).
 * [`kubeadm-cluster/`](k8s/kubeadm-cluster/): Upstream Kubernetes cluster lifecycle, Day-2 scaling, and rolling upgrades via Lima VMs.
 * [`k3s-bootstrap/`](k8s/k3s-bootstrap/): Multi-node k3s cluster provisioning via SSH jump host orchestration.
+* [`init-cluster/`](k8s/init-cluster/): Sandboxed Kubernetes init containers with unit tests, CEL manifest validation, and zero-trust runtime confinement.
 
 ### 2. Model Context Protocol (`mcp/`)
 

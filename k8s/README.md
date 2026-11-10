@@ -54,6 +54,7 @@ This directory contains standalone Starlark tutorials demonstrating the 3-tier a
 | [`12-multi-protocol-onboarding.star`](./12-multi-protocol-onboarding.star) | Platform | Multi-Protocol Tenant Onboarding & Last-Mile Delivery | `sql.open()`, `db.tx()`, `defer()`, `k8s.obj.*`, `k8s.apply()`, `k8s.yaml()` |
 | [`kubeadm-cluster/`](./kubeadm-cluster/) | Infra | Upstream Kubernetes Cluster Lifecycle & Day-2 Management (Lima VMs) | `template.file()`, `concur.map()`, `limactl`, `k8s.wait_for()`, `k8s.cordon/drain` |
 | [`k3s-bootstrap/`](./k3s-bootstrap/) | Infra | Multi-Node k3s Cluster Provisioning over SSH | `ssh.config()`, jump host proxying, token extraction |
+| [`init-cluster/`](./init-cluster/) | Workload | Sandboxed Kubernetes Init Containers & Configuration Bootstrap | `k8s.config()`, `retry.try_with_backoff()`, `k8s.obj.*`, `k8s.try_validate()`, `kite test` |
 
 ---
 
@@ -345,5 +346,34 @@ kite run . --action status
 ./main.star --action upgrade --version 1.31.2
 ./main.star --action destroy
 ```
+
+---
+
+### 14. Sandboxed Kubernetes Init Containers (`init-cluster/`)
+
+Demonstrates how to write, unit-test, package, and deploy Kubernetes `initContainers` using `ghcr.io/project-starkite/starkite:v0.11.8` instead of shell utility images:
+- **Modular Init Logic**: Separates pure key validation (`validate_keys`) and JSON configuration rendering (`render_config`) from cluster I/O (`init_bootstrap.star`).
+- **Offline Unit Testing**: Verifies configuration validation, integer conversion, JSON encoding, and SHA-256 digest generation in milliseconds via `kite test` (`init_bootstrap_test.star`).
+- **Dual Packaging Workflows**: Supports zero-build deployment via `ConfigMap` mounts (`generate_manifest.star` / `manifest.yaml`) and immutable image builds (`Dockerfile`).
+- **Live Cluster Verification**: Applies least-privilege RBAC and `ConfigMap` prerequisites to an active cluster and verifies the rendered artifacts and SHA-256 checksums (`deploy_and_verify.star`).
+
+```bash
+cd init-cluster/
+
+# Run offline unit tests:
+kite test ./init_bootstrap_test.star --sandbox-path-read=. --sandbox-path-write=/tmp --verbose
+
+# Generate full Kubernetes manifest stack:
+kite run ./generate_manifest.star --sandbox-path-read=. --var script.path=./init_bootstrap.star
+
+# Deploy and verify against an active cluster:
+kite run ./deploy_and_verify.star \
+  --sandbox-path-read=. \
+  --sandbox-path-read=$HOME/.kube \
+  --sandbox-path-write=/tmp \
+  --sandbox-net-allow \
+  --env HOME
+```
+
 
 

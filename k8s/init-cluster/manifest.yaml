@@ -1,0 +1,221 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: init-demo
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  name: payment-api-sa
+  namespace: init-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: payment-api-config-reader
+  namespace: init-demo
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: payment-api-config-reader-binding
+  namespace: init-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: payment-api-config-reader
+subjects:
+  - kind: ServiceAccount
+    name: payment-api-sa
+    namespace: init-demo
+---
+apiVersion: v1
+data:
+  DB_HOST: postgres.internal.svc.cluster.local
+  DB_PORT: "5432"
+  RATE_LIMIT_RPS: "250"
+  TLS_MODE: strict
+kind: ConfigMap
+metadata:
+  name: payment-api-settings
+  namespace: init-demo
+---
+apiVersion: v1
+data:
+  init_bootstrap.star: |
+    #!/usr/bin/env kite
+
+    REQUIRED_KEYS = ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"]
+
+    def validate_keys(raw_data):
+        missing = []
+        for k in REQUIRED_KEYS:
+            if k not in raw_data:
+                missing.append(k)
+        return missing
+
+    def render_config(ns, raw_data):
+        return {
+            "service": "payment-api",
+            "namespace": ns,
+            "database": {
+                "host": raw_data.get("DB_HOST", "localhost"),
+                "port": int(raw_data.get("DB_PORT", "5432")),
+                "tls_mode": raw_data.get("TLS_MODE", "strict"),
+            },
+            "limits": {
+                "rps": int(raw_data.get("RATE_LIMIT_RPS", "100")),
+            },
+        }
+
+    def main():
+        ns = var_str("namespace", "init-demo")
+        cm_name = var_str("configmap", "payment-api-settings")
+        out_dir = var_str("out.dir", "/tmp/shared-config")
+
+        k = k8s.config(namespace=ns, timeout="15s")
+
+        printf("Polling ConfigMap %s/%s...\n", ns, cm_name)
+        poll_res = retry.try_with_backoff(
+            lambda: k.try_get("configmap", cm_name, namespace=ns),
+            max_attempts=5,
+            delay="300ms",
+        )
+        if not poll_res.ok:
+            fail("dependency check failed for %s/%s: %s" % (ns, cm_name, poll_res.error))
+
+        cm = poll_res.value.value
+        raw_data = cm.get("data", {})
+
+        missing = validate_keys(raw_data)
+        if len(missing) > 0:
+            fail("missing required keys %s in ConfigMap %s" % (", ".join(missing), cm_name))
+
+        dir_res = fs.path(out_dir).try_mkdir(parents=True)
+        if not dir_res.ok:
+            fail("failed to create output directory %s: %s" % (out_dir, dir_res.error))
+
+        rendered = render_config(ns, raw_data)
+        payload = json.encode(rendered)
+        digest = hash.text(payload).sha256()
+
+        out_file = out_dir + "/runtime-config.json"
+        write_res = fs.path(out_file).try_write_text(payload)
+        if not write_res.ok:
+            fail("failed to write %s: %s" % (out_file, write_res.error))
+
+        sha_file = out_dir + "/runtime-config.sha256"
+        sha_res = fs.path(sha_file).try_write_text(digest + "  runtime-config.json\n")
+        if not sha_res.ok:
+            fail("failed to write %s: %s" % (sha_file, sha_res.error))
+
+        printf("Init bootstrap complete (attempts=%d):\n", poll_res.value.attempts)
+        printf("  Source ConfigMap: %s/%s\n", ns, cm_name)
+        printf("  Rendered Config:  %s\n", out_file)
+        printf("  SHA-256 Digest:   %s\n", digest[:16] + "...")
+kind: ConfigMap
+metadata:
+  name: payment-api-init-script
+  namespace: init-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: payment-api
+  name: payment-api
+  namespace: init-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-api
+  template:
+    metadata:
+      labels:
+        app: payment-api
+    spec:
+      containers:
+        - command:
+            - sh
+            - -c
+            - cat /etc/payment-api/runtime-config.json && echo '' && cat /etc/payment-api/runtime-config.sha256 && sleep 3600
+          image: busybox:1.37
+          name: payment-api
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          volumeMounts:
+            - mountPath: /etc/payment-api
+              name: shared-config
+              readOnly: true
+      initContainers:
+        - args:
+            - run
+            - /scripts/init_bootstrap.star
+            - --sandbox-path-read=/scripts
+            - --sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount
+            - --sandbox-path-write=/work/shared
+            - --sandbox-net-allow
+            - --env
+            - KUBERNETES_SERVICE_HOST
+            - --env
+            - KUBERNETES_SERVICE_PORT
+            - --var
+            - namespace=init-demo
+            - --var
+            - out.dir=/work/shared
+          image: ghcr.io/project-starkite/starkite:v0.11.8
+          name: config-bootstrap
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 25m
+              memory: 32Mi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          volumeMounts:
+            - mountPath: /work/shared
+              name: shared-config
+            - mountPath: /scripts
+              name: bootstrap-script
+              readOnly: true
+      serviceAccountName: payment-api-sa
+      volumes:
+        - emptyDir: {}
+          name: shared-config
+        - configMap:
+            name: payment-api-init-script
+          name: bootstrap-script
+
