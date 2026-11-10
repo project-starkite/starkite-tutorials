@@ -2,7 +2,7 @@
 
 Kubernetes `initContainers` execute critical startup choreography before your application containers are allowed to start. In production clusters, pods frequently need an init container to poll the Kubernetes API until an upstream `ConfigMap` or `Secret` is populated by an operator, validate that required configuration parameters are present and properly typed, transform flat key-value strings into a structured configuration file on a shared `emptyDir` volume, and compute a SHA-256 checksum for integrity verification.
 
-Despite how critical this startup phase is, platform teams almost always implement init containers using ad-hoc Bash scripts inside general-purpose utility images (`bitnami/kubectl`, `alpine`, or `ubuntu` with `curl`, `jq`, and `envsubst`) or heavyweight Python images. Both approaches introduce operational friction, unnecessary security exposure, and slow feedback loops.
+Despite how critical this startup phase is, platform teams almost always implement init containers using ad-hoc shell scripts inside general-purpose utility images (`alpine/k8s`, `alpine`, or `ubuntu` with `kubectl`, `curl`, `jq`, and `envsubst`) or heavyweight Python images. Both approaches introduce operational friction, unnecessary security exposure, and slow feedback loops.
 
 Starkite (`kite`) provides a purpose-built alternative: a single static binary and deterministic Starlark runtime packaged as a minimal container image (`ghcr.io/project-starkite/starkite:v0.11.8`). Because Starkite embeds Kubernetes API access, structured JSON/YAML serialization, exponential backoff retries, cryptographic hashing, unit testing, and kernel-level sandboxing directly into the runtime, you can write, unit-test, build, and deploy init containers without a shell or an operating system userland.
 
@@ -12,60 +12,77 @@ Starkite (`kite`) provides a purpose-built alternative: a single static binary a
 
 To understand why init containers become a maintenance burden, compare how a typical shell-based init container is constructed against what the task actually requires. Suppose your `payment-api` service needs an init container to wait for a `ConfigMap` named `payment-api-settings`, verify four required keys (`DB_HOST`, `DB_PORT`, `RATE_LIMIT_RPS`, and `TLS_MODE`), convert `DB_PORT` and `RATE_LIMIT_RPS` from strings to integers, and write `/work/shared/runtime-config.json` along with `/work/shared/runtime-config.sha256`.
 
-In a traditional Deployment, engineers embed an inline `/bin/sh -c` script that chains together `kubectl`, `jq`, and `sha256sum`:
+In a traditional Deployment—assuming the Pod mounts a `shared-config` `emptyDir` volume and binds a `ServiceAccount` authorized to read `configmaps`—engineers embed an inline `/bin/sh -c` script inside a utility image such as `alpine/k8s` to chain together `kubectl`, `jq`, and `sha256sum`:
 
 ```yaml
-# Traditional Bash + kubectl + jq init container
+# Traditional POSIX sh + kubectl + jq init container
 initContainers:
   - name: config-bootstrap
-    image: bitnami/kubectl:1.32
+    image: alpine/k8s:1.32.2
     command: ["/bin/sh", "-c"]
     args:
       - |
-        set -euo pipefail
-        ATTEMPTS=0
-        until kubectl get configmap payment-api-settings -n init-demo -o json > /tmp/cm.json 2>/dev/null; do
-          ATTEMPTS=$((ATTEMPTS + 1))
-          if [ "$ATTEMPTS" -ge 5 ]; then
-            echo "Timed out waiting for ConfigMap" >&2
+        set -eu
+
+        i=0
+        until cm_json=$(kubectl -n init-demo get configmap payment-api-settings -o json 2>/dev/null); do
+          i=$((i + 1))
+          if [ "$i" -ge 5 ]; then
+            echo "Timed out waiting for ConfigMap init-demo/payment-api-settings" >&2
             exit 1
           fi
           sleep 1
         done
-        for KEY in DB_HOST DB_PORT RATE_LIMIT_RPS TLS_MODE; do
-          VAL=$(jq -r ".data.${KEY} // empty" /tmp/cm.json)
-          if [ -z "$VAL" ]; then
-            echo "Missing required key: $KEY" >&2
+
+        for key in DB_HOST DB_PORT RATE_LIMIT_RPS TLS_MODE; do
+          if [ -z "$(printf '%s\n' "$cm_json" | jq -r ".data.${key} // empty")" ]; then
+            echo "Missing required key ${key} in ConfigMap payment-api-settings" >&2
             exit 1
           fi
         done
-        jq -n \
-          --arg host "$(jq -r '.data.DB_HOST' /tmp/cm.json)" \
-          --argjson port "$(jq -r '.data.DB_PORT' /tmp/cm.json)" \
-          --arg tls "$(jq -r '.data.TLS_MODE' /tmp/cm.json)" \
-          --argjson rps "$(jq -r '.data.RATE_LIMIT_RPS' /tmp/cm.json)" \
-          '{service:"payment-api",namespace:"init-demo",database:{host:$host,port:$port,tls_mode:$tls},limits:{rps:$rps}}' \
-          > /work/shared/runtime-config.json
-        sha256sum /work/shared/runtime-config.json > /work/shared/runtime-config.sha256
+
+        cd /work/shared
+        printf '%s\n' "$cm_json" | jq -c '{
+          service: "payment-api",
+          namespace: "init-demo",
+          database: {
+            host: .data.DB_HOST,
+            port: (.data.DB_PORT | tonumber),
+            tls_mode: .data.TLS_MODE
+          },
+          limits: {
+            rps: (.data.RATE_LIMIT_RPS | tonumber)
+          }
+        }' > runtime-config.json
+        sha256sum runtime-config.json > runtime-config.sha256
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    volumeMounts:
+      - name: shared-config
+        mountPath: /work/shared
 ```
 
-This 25-line shell snippet suffers from five architectural problems:
+Even when written cleanly and hardened with a non-root, read-only `securityContext`, this shell-based approach carries five structural limitations:
 
-1. **Bloated Image & CVE Surface**: To run 25 lines of glue logic, the node must pull an image containing `/bin/sh`, `coreutils`, `kubectl`, `jq`, and shared C libraries. Every package in that base layer triggers vulnerability scanner findings that your team must patch and rebuild.
-2. **Fragile String Interpolation & Quoting**: Type conversions (`--argjson`) and shell variable expansions break silently or fail with cryptic syntax errors when a `ConfigMap` value contains whitespace, quotes, or non-numeric characters.
-3. **No Local Unit Testing**: You cannot unit-test an inline YAML shell string in CI without spinning up a container or mocking `kubectl` binaries on `$PATH`.
-4. **Unconfined Execution**: If an attacker compromises an upstream configuration value or injects a command flag, `/bin/sh` and every utility binary in the container are available for arbitrary command execution.
-5. **Ambient Environment Exposure**: Kubernetes automatically injects service discovery variables and any `envFrom` secrets into the container's process environment, exposing them to every subprocess spawned by the shell script.
+1. **Bloated Image & CVE Surface**: For ~30 lines of startup logic, the node must pull a multi-tool utility image (`alpine/k8s`) bundling an OS userland, `/bin/sh`, `kubectl`, `jq`, `curl`, and shared C/TLS libraries. Every package in that base layer increases pull latency and generates vulnerability scanner findings that your team must patch and rebuild.
+2. **Opaque Subprocess & Error Plumbing**: The script glues together `kubectl`, `jq`, and `sha256sum` through text streams and exit codes. Suppressing stderr (`2>/dev/null`) inside a fixed `sleep 1` loop hides whether `kubectl` failed due to transient `NotFound` or permanent RBAC/TLS errors, lacks exponential backoff with jitter, and surfaces type conversion errors (`tonumber`) only as raw stderr text at Pod startup.
+3. **No Direct Unit Testing**: Because validation and JSON rendering are embedded inside an inline YAML shell string coupled to `kubectl` and `jq` subprocesses, you cannot import and unit-test individual functions locally in milliseconds without extracting scripts, spinning up containers, or mocking CLI binaries on `$PATH`.
+4. **Unconfined Runtime Inside the Container**: Even under a restricted `securityContext`, `/bin/sh`, `curl`, `kubectl`, and every utility binary in the image remain executable, with unrestricted read access across the container rootfs and outbound network access beyond what Pod `securityContext` fields can constrain.
+5. **Ambient Environment Exposure**: Kubernetes injects service discovery variables and any Pod-level environment variables into the shell process, exposing them to every child subprocess (`kubectl`, `jq`, `sha256sum`) spawned during bootstrap.
 
 Starkite eliminates each of these failure modes by replacing the shell and external CLI binaries with built-in Starlark modules and a default-deny sandbox:
 
-| Operational Dimension | Bash + `kubectl` / `jq` Image | Python + `kubernetes` SDK Image | Starkite (`ghcr.io/project-starkite/starkite:v0.11.8`) |
+| Operational Dimension | Shell + Utility Image (`alpine/k8s`) | Python + `kubernetes` SDK Image | Starkite (`ghcr.io/project-starkite/starkite:v0.11.8`) |
 | :--- | :--- | :--- | :--- |
 | **Container Base Image** | 80–250 MB OS layer + CLI tools | 120–300 MB OS + Python + `pip` packages | Minimal static binary built on `cgr.dev/chainguard/static` |
 | **Shell & Binary Surface** | Requires `/bin/sh`, `kubectl`, `jq`, `coreutils` | Requires Python interpreter + shared libs | Zero shell (`/bin/sh` does not exist in the image) |
 | **Kubernetes API Client** | Spawns `kubectl` subprocesses | External `kubernetes` pip package | Built-in `k8s` module with `InClusterConfig` |
 | **Retries & Backoff** | Hand-rolled `until ... sleep` loops | Third-party `tenacity` or custom loops | Built-in `retry.with_backoff()` with jitter/delay |
-| **Error Handling** | `set -e` exit codes and stderr parsing | Uncaught exceptions and stack traces | Fail-fast defaults + `Result` values (`try_*`) for probes |
+| **Error Handling** | `set -eu` exit codes and stderr redirection | Uncaught exceptions and stack traces | Fail-fast defaults + `Result` values (`try_*`) for probes |
 | **Unit Testing** | Manual cluster deploys or `bats` | Requires `pytest` + virtualenv setup | Built-in `kite test` runner (executes in <10ms) |
 | **Process Confinement** | Unconfined access to container filesystem/env | Unconfined access to container filesystem/env | Zero-trust env scrubbing + path/network sandboxing |
 
