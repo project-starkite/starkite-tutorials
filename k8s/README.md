@@ -54,7 +54,7 @@ This directory contains standalone Starlark tutorials demonstrating the 3-tier a
 | [`12-multi-protocol-onboarding.star`](./12-multi-protocol-onboarding.star) | Platform | Multi-Protocol Tenant Onboarding & Last-Mile Delivery | `sql.open()`, `db.tx()`, `defer()`, `k8s.obj.*`, `k8s.apply()`, `k8s.yaml()` |
 | [`kubeadm-cluster/`](./kubeadm-cluster/) | Infra | Upstream Kubernetes Cluster Lifecycle & Day-2 Management (Lima VMs) | `template.file()`, `concur.map()`, `limactl`, `k8s.wait_for()`, `k8s.cordon/drain` |
 | [`k3s-bootstrap/`](./k3s-bootstrap/) | Infra | Multi-Node k3s Cluster Provisioning over SSH | `ssh.config()`, jump host proxying, token extraction |
-| [`init-cluster/`](./init-cluster/) | Workload | Sandboxed Kubernetes Init Containers & Configuration Bootstrap | `k8s.config()`, `retry.try_with_backoff()`, `k8s.obj.*`, `k8s.try_validate()`, `kite test` |
+| [`init-cluster/`](./init-cluster/) | Workload | Sandboxed Kubernetes Init Containers & Configuration Bootstrap | `k8s.config()`, `retry.with_backoff()`, `k8s.obj.*`, `k8s.validate()`, `kite test` |
 
 ---
 
@@ -355,7 +355,7 @@ Demonstrates how to write, unit-test, package, and deploy Kubernetes `initContai
 - **Modular Init Logic**: Separates pure key validation (`validate_keys`) and JSON configuration rendering (`render_config`) from cluster I/O (`init_bootstrap.star`).
 - **Offline Unit Testing**: Verifies configuration validation, integer conversion, JSON encoding, and SHA-256 digest generation in milliseconds via `kite test` (`init_bootstrap_test.star`).
 - **Dual Packaging Workflows**: Supports zero-build deployment via `ConfigMap` mounts (`generate_manifest.star` / `manifest.yaml`) and immutable image builds (`Dockerfile`).
-- **Live Cluster Verification**: Applies least-privilege RBAC and `ConfigMap` prerequisites to an active cluster and verifies the rendered artifacts and SHA-256 checksums (`deploy_and_verify.star`).
+- **Live Cluster Verification**: Applies the 7-resource workload stack to an active cluster, waits for rollout availability, and verifies container logs and SHA-256 checksums (`deploy_and_verify.star`).
 
 ```bash
 cd init-cluster/
@@ -364,15 +364,14 @@ cd init-cluster/
 kite test ./init_bootstrap_test.star --sandbox-path-read=. --sandbox-path-write=/tmp --verbose
 
 # Generate full Kubernetes manifest stack:
-kite run ./generate_manifest.star --sandbox-path-read=. --var script.path=./init_bootstrap.star
+kite run ./generate_manifest.star --sandbox-path-read=. > ./manifest.yaml
 
 # Deploy and verify against an active cluster:
 kite run ./deploy_and_verify.star \
   --sandbox-path-read=. \
   --sandbox-path-read=$HOME/.kube \
-  --sandbox-path-write=/tmp \
   --sandbox-net-allow \
-  --env HOME
+  --env=HOME
 ```
 
 

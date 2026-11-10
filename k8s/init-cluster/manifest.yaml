@@ -57,71 +57,56 @@ data:
     REQUIRED_KEYS = ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"]
 
     def validate_keys(raw_data):
-        missing = []
-        for k in REQUIRED_KEYS:
-            if k not in raw_data:
-                missing.append(k)
-        return missing
+        return [k for k in REQUIRED_KEYS if not raw_data.get(k)]
 
     def render_config(ns, raw_data):
         return {
             "service": "payment-api",
             "namespace": ns,
             "database": {
-                "host": raw_data.get("DB_HOST", "localhost"),
-                "port": int(raw_data.get("DB_PORT", "5432")),
-                "tls_mode": raw_data.get("TLS_MODE", "strict"),
+                "host": raw_data["DB_HOST"],
+                "port": int(raw_data["DB_PORT"]),
+                "tls_mode": raw_data["TLS_MODE"],
             },
             "limits": {
-                "rps": int(raw_data.get("RATE_LIMIT_RPS", "100")),
+                "rps": int(raw_data["RATE_LIMIT_RPS"]),
             },
         }
 
     def main():
         ns = var_str("namespace", "init-demo")
         cm_name = var_str("configmap", "payment-api-settings")
-        out_dir = var_str("out.dir", "/tmp/shared-config")
+        out = fs.path(var_str("out.dir", "/tmp/shared-config"))
 
         k = k8s.config(namespace=ns, timeout="15s")
 
         printf("Polling ConfigMap %s/%s...\n", ns, cm_name)
-        poll_res = retry.try_with_backoff(
-            lambda: k.try_get("configmap", cm_name, namespace=ns),
+        poll = retry.with_backoff(
+            lambda: k.try_get("configmap", cm_name),
             max_attempts=5,
             delay="300ms",
         )
-        if not poll_res.ok:
-            fail("dependency check failed for %s/%s: %s" % (ns, cm_name, poll_res.error))
+        if not poll.ok:
+            fail("dependency check failed for %s/%s: %s" % (ns, cm_name, poll.error))
 
-        cm = poll_res.value.value
-        raw_data = cm.get("data", {})
-
+        raw_data = poll.value.get("data", {})
         missing = validate_keys(raw_data)
-        if len(missing) > 0:
+        if missing:
             fail("missing required keys %s in ConfigMap %s" % (", ".join(missing), cm_name))
 
-        dir_res = fs.path(out_dir).try_mkdir(parents=True)
-        if not dir_res.ok:
-            fail("failed to create output directory %s: %s" % (out_dir, dir_res.error))
-
-        rendered = render_config(ns, raw_data)
-        payload = json.encode(rendered)
+        out.mkdir(parents=True)
+        payload = json.encode(render_config(ns, raw_data))
         digest = hash.text(payload).sha256()
 
-        out_file = out_dir + "/runtime-config.json"
-        write_res = fs.path(out_file).try_write_text(payload)
-        if not write_res.ok:
-            fail("failed to write %s: %s" % (out_file, write_res.error))
+        cfg_file = out / "runtime-config.json"
+        sha_file = out / "runtime-config.sha256"
+        cfg_file.write_text(payload)
+        sha_file.write_text(digest + "  runtime-config.json\n")
 
-        sha_file = out_dir + "/runtime-config.sha256"
-        sha_res = fs.path(sha_file).try_write_text(digest + "  runtime-config.json\n")
-        if not sha_res.ok:
-            fail("failed to write %s: %s" % (sha_file, sha_res.error))
-
-        printf("Init bootstrap complete (attempts=%d):\n", poll_res.value.attempts)
+        printf("Init bootstrap complete (attempts=%d):\n", poll.attempts)
         printf("  Source ConfigMap: %s/%s\n", ns, cm_name)
-        printf("  Rendered Config:  %s\n", out_file)
-        printf("  SHA-256 Digest:   %s\n", digest[:16] + "...")
+        printf("  Rendered Config:  %s\n", cfg_file.string)
+        printf("  SHA-256 Digest:   %s...\n", digest[:16])
 kind: ConfigMap
 metadata:
   name: payment-api-init-script
@@ -181,14 +166,10 @@ spec:
             - --sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount
             - --sandbox-path-write=/work/shared
             - --sandbox-net-allow
-            - --env
-            - KUBERNETES_SERVICE_HOST
-            - --env
-            - KUBERNETES_SERVICE_PORT
-            - --var
-            - namespace=init-demo
-            - --var
-            - out.dir=/work/shared
+            - --env=KUBERNETES_SERVICE_HOST
+            - --env=KUBERNETES_SERVICE_PORT
+            - --var=namespace=init-demo
+            - --var=out.dir=/work/shared
           image: ghcr.io/project-starkite/starkite:v0.11.8
           name: config-bootstrap
           resources:
@@ -218,4 +199,3 @@ spec:
         - configMap:
             name: payment-api-init-script
           name: bootstrap-script
-

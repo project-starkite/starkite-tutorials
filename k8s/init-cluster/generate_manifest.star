@@ -1,55 +1,29 @@
 #!/usr/bin/env kite
 
-def main():
-    app = var_str("app", "payment-api")
-    ns = var_str("namespace", "init-demo")
-    app_image = var_str("image", "busybox:1.37")
-    kite_image = var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8")
-    script_path = var_str("script.path", "./init_bootstrap.star")
-
-    script_res = fs.path(script_path).try_read_text()
-    if not script_res.ok:
-        fail("failed to read init script %s: %s" % (script_path, script_res.error))
-
-    ns_obj = k8s.obj.namespace(name=ns)
-
-    sa_name = app + "-sa"
-    sa_obj = k8s.obj.service_account(
-        name=sa_name,
+def build_stack(
+    app="payment-api",
+    ns="init-demo",
+    app_image="busybox:1.37",
+    kite_image="ghcr.io/project-starkite/starkite:v0.11.8",
+    script_path="./init_bootstrap.star",
+):
+    sa = k8s.obj.service_account(
+        name=app + "-sa",
         namespace=ns,
         automount_service_account_token=True,
     )
-
     role_name = app + "-config-reader"
-    role_obj = k8s.obj.role(
+    role = k8s.obj.role(
         name=role_name,
         namespace=ns,
-        rules=[
-            {
-                "apiGroups": [""],
-                "resources": ["configmaps"],
-                "verbs": ["get", "list"],
-            },
-        ],
+        rules=[k8s.obj.policy_rule(api_groups=[""], resources=["configmaps"], verbs=["get", "list"])],
     )
-
-    rb_obj = k8s.obj.role_binding(
+    rb = k8s.obj.role_binding(
         name=role_name + "-binding",
         namespace=ns,
-        role_ref={
-            "apiGroup": "rbac.authorization.k8s.io",
-            "kind": "Role",
-            "name": role_name,
-        },
-        subjects=[
-            {
-                "kind": "ServiceAccount",
-                "name": sa_name,
-                "namespace": ns,
-            },
-        ],
+        role_ref={"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": role_name},
+        subjects=[k8s.obj.subject(kind="ServiceAccount", name=sa, namespace=ns)],
     )
-
     settings_cm = k8s.obj.config_map(
         name=app + "-settings",
         namespace=ns,
@@ -60,16 +34,13 @@ def main():
             "TLS_MODE": "strict",
         },
     )
-
     script_cm = k8s.obj.config_map(
         name=app + "-init-script",
         namespace=ns,
-        data={
-            "init_bootstrap.star": script_res.value,
-        },
+        data={"init_bootstrap.star": fs.read_text(script_path)},
     )
 
-    non_root_ctx = k8s.obj.security_context(
+    non_root = k8s.obj.security_context(
         run_as_non_root=True,
         run_as_user=65532,
         read_only_root=True,
@@ -86,16 +57,12 @@ def main():
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
             "--sandbox-path-write=/work/shared",
             "--sandbox-net-allow",
-            "--env",
-            "KUBERNETES_SERVICE_HOST",
-            "--env",
-            "KUBERNETES_SERVICE_PORT",
-            "--var",
-            "namespace=" + ns,
-            "--var",
-            "out.dir=/work/shared",
+            "--env=KUBERNETES_SERVICE_HOST",
+            "--env=KUBERNETES_SERVICE_PORT",
+            "--var=namespace=" + ns,
+            "--var=out.dir=/work/shared",
         ],
-        security_context=non_root_ctx,
+        security_context=non_root,
         resources=k8s.obj.resource_requirements(
             requests={"cpu": "25m", "memory": "32Mi"},
             limits={"cpu": "100m", "memory": "64Mi"},
@@ -115,7 +82,7 @@ def main():
             "cat /etc/payment-api/runtime-config.json && echo '' && cat /etc/payment-api/runtime-config.sha256 && sleep 3600",
         ],
         ports=[k8s.obj.container_port(container_port=8080, name="http")],
-        security_context=non_root_ctx,
+        security_context=non_root,
         resources=k8s.obj.resource_requirements(
             requests={"cpu": "100m", "memory": "128Mi"},
             limits={"cpu": "500m", "memory": "256Mi"},
@@ -130,23 +97,29 @@ def main():
         namespace=ns,
         labels={"app": app},
         replicas=2,
-        service_account=sa_name,
+        service_account=sa,
         init_containers=[init_container],
         containers=[app_container],
         volumes=[
-            k8s.obj.volume(name="shared-config", empty_dir={}),
-            k8s.obj.volume(name="bootstrap-script", config_map={"name": app + "-init-script"}),
+            k8s.obj.volume(name="shared-config", empty_dir=True),
+            k8s.obj.volume(name="bootstrap-script", config_map=script_cm),
         ],
     )
 
-    check = k8s.try_validate(
+    k8s.validate(
         manifest=dep,
         expression="object.spec.template.spec.initContainers.all(c, c.securityContext.runAsNonRoot == true && c.securityContext.readOnlyRootFilesystem == true)",
+        strict=True,
     )
-    if not check.ok:
-        fail("validation call failed: %s" % check.error)
-    if not check.value.valid:
-        fail("init container security validation failed: %s" % check.value.violations)
 
-    stack = [ns_obj, sa_obj, role_obj, rb_obj, settings_cm, script_cm, dep]
+    return [k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, script_cm, dep]
+
+def main():
+    stack = build_stack(
+        app=var_str("app", "payment-api"),
+        ns=var_str("namespace", "init-demo"),
+        app_image=var_str("image", "busybox:1.37"),
+        kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
+        script_path=var_str("script.path", "./init_bootstrap.star"),
+    )
     print(k8s.yaml(stack))

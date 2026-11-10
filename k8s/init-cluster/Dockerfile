@@ -9,7 +9,7 @@ CMD [ \
     "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount", \
     "--sandbox-path-write=/work/shared", \
     "--sandbox-net-allow", \
-    "--env", "KUBERNETES_SERVICE_HOST", \
-    "--env", "KUBERNETES_SERVICE_PORT", \
-    "--var", "out.dir=/work/shared" \
+    "--env=KUBERNETES_SERVICE_HOST", \
+    "--env=KUBERNETES_SERVICE_PORT", \
+    "--var=out.dir=/work/shared" \
 ]

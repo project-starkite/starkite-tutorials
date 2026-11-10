@@ -1,90 +1,46 @@
 #!/usr/bin/env kite
 
-load("./init_bootstrap.star", "init_bootstrap")
+load("./generate_manifest.star", "generate_manifest")
 
 def main():
     app = var_str("app", "payment-api")
     ns = var_str("namespace", "init-demo")
-    out_dir = var_str("out.dir", "/tmp/shared-config")
 
-    k = k8s.config(namespace=ns, timeout="15s")
-
-    ns_obj = k8s.obj.namespace(name=ns)
-    sa_name = app + "-sa"
-    sa_obj = k8s.obj.service_account(
-        name=sa_name,
-        namespace=ns,
-        automount_service_account_token=True,
+    k = k8s.config(namespace=ns, timeout="30s")
+    stack = generate_manifest.build_stack(
+        app=app,
+        ns=ns,
+        kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
+        script_path=var_str("script.path", "./init_bootstrap.star"),
     )
-    role_name = app + "-config-reader"
-    role_obj = k8s.obj.role(
-        name=role_name,
-        namespace=ns,
-        rules=[
-            {
-                "apiGroups": [""],
-                "resources": ["configmaps"],
-                "verbs": ["get", "list"],
-            },
-        ],
-    )
-    rb_obj = k8s.obj.role_binding(
-        name=role_name + "-binding",
-        namespace=ns,
-        role_ref={
-            "apiGroup": "rbac.authorization.k8s.io",
-            "kind": "Role",
-            "name": role_name,
-        },
-        subjects=[
-            {
-                "kind": "ServiceAccount",
-                "name": sa_name,
-                "namespace": ns,
-            },
-        ],
-    )
-    settings_cm = k8s.obj.config_map(
-        name=app + "-settings",
-        namespace=ns,
-        data={
-            "DB_HOST": "postgres.internal.svc.cluster.local",
-            "DB_PORT": "5432",
-            "RATE_LIMIT_RPS": "250",
-            "TLS_MODE": "strict",
-        },
-    )
+    k.apply(stack, force=True)
 
-    prereqs = [ns_obj, sa_obj, role_obj, rb_obj, settings_cm]
-    for obj in prereqs:
-        res = k.try_apply(obj, namespace=ns)
-        if not res.ok:
-            fail("failed to apply %s: %s" % (obj.kind, res.error))
+    ready = k.wait_for("deployment", app, condition="Available", timeout="90s")
+    if not ready.ready:
+        fail("deployment %s did not become Available: %s" % (app, ready.message))
 
-    init_bootstrap.main()
+    pods = [p for p in k.list("pods", labels="app=" + app) if p.status.phase == "Running"]
+    if not pods:
+        fail("no running pods found for app=%s" % app)
+    pod_name = pods[0].metadata.name
 
-    cfg_path = out_dir + "/runtime-config.json"
-    sha_path = out_dir + "/runtime-config.sha256"
+    init_logs = k.logs(pod_name, container="config-bootstrap").strip()
+    app_lines = k.logs(pod_name, container=app).strip().split("\n")
+    raw_json = app_lines[0]
+    recorded_digest = app_lines[1].split(" ")[0]
 
-    cfg_res = fs.path(cfg_path).try_read_text()
-    if not cfg_res.ok:
-        fail("failed to read rendered config: %s" % cfg_res.error)
-
-    sha_res = fs.path(sha_path).try_read_text()
-    if not sha_res.ok:
-        fail("failed to read sha256 file: %s" % sha_res.error)
-
-    actual_digest = hash.text(cfg_res.value).sha256()
-    recorded_digest = sha_res.value.split(" ")[0]
+    actual_digest = hash.text(raw_json).sha256()
     if actual_digest != recorded_digest:
         fail("digest mismatch: actual=%s recorded=%s" % (actual_digest, recorded_digest))
 
-    parsed = json.decode(cfg_res.value)
+    parsed = json.decode(raw_json)
+    print(init_logs + "\n")
 
     tbl = table.new(["Check", "Target", "Result"])
-    tbl.add_row("RBAC & ConfigMap Apply", ns + "/" + app + "-settings", "APPLIED (5 resources)")
-    tbl.add_row("Init Script Execution", cfg_path, "RENDERED")
-    tbl.add_row("Database Endpoint", parsed["database"]["host"] + ":" + str(int(parsed["database"]["port"])), "VERIFIED")
+    tbl.add_row("Manifest Stack Apply", ns + "/" + app, "APPLIED (%d resources)" % len(stack))
+    tbl.add_row("Deployment Readiness", "deployment/" + app, "AVAILABLE (%d pods)" % len(pods))
+    tbl.add_row("Init Container Logs", pod_name + "/config-bootstrap", "COMPLETED")
+    tbl.add_row("Database Endpoint", "%s:%d" % (parsed["database"]["host"], int(parsed["database"]["port"])), "VERIFIED")
     tbl.add_row("Rate Limit (RPS)", str(int(parsed["limits"]["rps"])), "VERIFIED")
     tbl.add_row("SHA-256 Integrity", actual_digest[:16] + "...", "MATCHED")
-    print("\n" + tbl.render().strip())
+    print(tbl.render().strip())
