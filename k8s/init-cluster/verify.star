@@ -15,7 +15,7 @@ def main():
         fail("no running pods found for app=%s" % app)
     pod_name = pods[0].metadata.name
 
-    app_lines = k.logs(pod_name, container=app).strip().split("\n")
+    app_lines = [l for l in k.logs(pod_name, container=app).strip().split("\n") if not l.startswith("sandbox:")]
     raw_json = app_lines[0]
     recorded_digest = app_lines[1].split(" ")[0]
 

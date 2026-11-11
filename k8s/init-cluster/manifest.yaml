@@ -111,11 +111,20 @@ spec:
         app: payment-api
     spec:
       containers:
-        - command:
-            - sh
-            - -c
-            - cat /etc/payment-api/runtime-config.json && echo '' && cat /etc/payment-api/runtime-config.sha256 && sleep 3600
-          image: busybox:1.37
+        - args:
+            - |
+              def main():
+                  cfg = fs.read_text("/etc/payment-api/runtime-config.json")
+                  sha = fs.read_text("/etc/payment-api/runtime-config.sha256")
+                  print(cfg)
+                  print(sha)
+                  http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
+            - --sandbox-path-read=/etc/payment-api
+            - --sandbox-net-allow
+          command:
+            - kite
+            - eval
+          image: ghcr.io/project-starkite/starkite:v0.11.8
           name: payment-api
           ports:
             - containerPort: 8080

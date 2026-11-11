@@ -3,7 +3,6 @@
 def build_stack(
     app="payment-api",
     ns="init-demo",
-    app_image="busybox:1.37",
     kite_image="ghcr.io/project-starkite/starkite:v0.11.8",
 ):
     sa = k8s.obj.service_account(name=app + "-sa", namespace=ns)
@@ -55,13 +54,22 @@ def build_stack(
         ],
     )
 
+    web_script = """def main():
+    cfg = fs.read_text("/etc/%s/runtime-config.json")
+    sha = fs.read_text("/etc/%s/runtime-config.sha256")
+    print(cfg)
+    print(sha)
+    http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
+""" % (app, app)
+
     app_container = k8s.obj.container(
         name=app,
-        image=app_image,
-        command=[
-            "sh",
-            "-c",
-            "cat /etc/%s/runtime-config.json && echo '' && cat /etc/%s/runtime-config.sha256 && sleep 3600" % (app, app),
+        image=kite_image,
+        command=["kite", "eval"],
+        args=[
+            web_script,
+            "--sandbox-path-read=/etc/" + app,
+            "--sandbox-net-allow",
         ],
         ports=[k8s.obj.container_port(container_port=8080, name="http")],
         volume_mounts=[
