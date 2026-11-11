@@ -11,7 +11,6 @@ def main():
         app=app,
         ns=ns,
         kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
-        script_path=var_str("script.path", "./init_bootstrap.star"),
     )
     k.apply(stack, force=True)
 

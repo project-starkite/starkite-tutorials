@@ -5,7 +5,6 @@ def build_stack(
     ns="init-demo",
     app_image="busybox:1.37",
     kite_image="ghcr.io/project-starkite/starkite:v0.11.8",
-    script_path="./init_bootstrap.star",
 ):
     sa = k8s.obj.service_account(
         name=app + "-sa",
@@ -42,12 +41,33 @@ def build_stack(
         capabilities={"drop": ["ALL"]},
     )
 
+    bootstrap_script = """def main():
+    k = k8s.config(namespace="%s")
+    cm = retry.with_backoff(lambda: k.try_get("configmap", "%s-settings"), max_attempts=5, delay="300ms")
+    if not cm.ok:
+        fail("configmap unavailable: %%s" %% cm.error)
+    data = cm.value.get("data", {})
+    missing = [k for k in ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"] if not data.get(k)]
+    if missing:
+        fail("missing required keys: %%s" %% ", ".join(missing))
+    payload = json.encode({
+        "service": "%s",
+        "namespace": "%s",
+        "database": {"host": data["DB_HOST"], "port": int(data["DB_PORT"]), "tls_mode": data["TLS_MODE"]},
+        "limits": {"rps": int(data["RATE_LIMIT_RPS"])},
+    })
+    out = fs.path("/work/shared")
+    out.mkdir(parents=True)
+    (out / "runtime-config.json").write_text(payload)
+    (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\\n")
+""" % (ns, app, app, ns)
+
     init_container = k8s.obj.container(
         name="config-bootstrap",
         image=kite_image,
         command=["kite", "eval"],
         args=[
-            fs.read_text(script_path),
+            bootstrap_script,
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
             "--sandbox-path-write=/work/shared",
             "--sandbox-net-allow",
@@ -70,7 +90,7 @@ def build_stack(
         command=[
             "sh",
             "-c",
-            "cat /etc/payment-api/runtime-config.json && echo '' && cat /etc/payment-api/runtime-config.sha256 && sleep 3600",
+            "cat /etc/%s/runtime-config.json && echo '' && cat /etc/%s/runtime-config.sha256 && sleep 3600" % (app, app),
         ],
         ports=[k8s.obj.container_port(container_port=8080, name="http")],
         security_context=non_root,
@@ -79,7 +99,7 @@ def build_stack(
             limits={"cpu": "500m", "memory": "256Mi"},
         ),
         volume_mounts=[
-            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/payment-api", read_only=True),
+            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/" + app, read_only=True),
         ],
     )
 
@@ -110,6 +130,5 @@ def main():
         ns=var_str("namespace", "init-demo"),
         app_image=var_str("image", "busybox:1.37"),
         kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
-        script_path=var_str("script.path", "./init_bootstrap.star"),
     )
     print(k8s.yaml(stack))

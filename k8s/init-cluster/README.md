@@ -90,9 +90,9 @@ Starkite eliminates each of these failure modes by combining zero-ceremony inlin
 
 ---
 
-## How Starkite Inline Init Containers Work Inside a Pod
+## How Inline Starkite Init Containers Work
 
-Before writing code, examine how an inline Starkite init container interacts with the Kubernetes control plane, the Pod's mounted volumes, and the kernel sandbox.
+Before deploying, examine how an inline Starkite init container interacts with the Kubernetes control plane, the Pod's mounted volumes, and the kernel sandbox.
 
 ```mermaid
 sequenceDiagram
@@ -132,72 +132,51 @@ All files for this walkthrough are located in [`k8s/init-cluster/`](./):
 
 | File | Purpose |
 | :--- | :--- |
-| [`init_bootstrap.star`](./init_bootstrap.star) | Standalone reference implementation of the concise bootstrap logic. |
-| [`generate_manifest.star`](./generate_manifest.star) | Manifest generator that constructs the 6-resource Kubernetes stack with an inline `kite eval` init container and CEL validation. |
-| [`manifest.yaml`](./manifest.yaml) | Pre-generated multi-document Kubernetes manifest ready for `kubectl apply -f ./manifest.yaml`. |
+| [`manifest.yaml`](./manifest.yaml) | Pre-generated multi-document Kubernetes manifest with the inline `kite eval` init container, ready for `kubectl apply -f ./manifest.yaml`. |
+| [`generate_manifest.star`](./generate_manifest.star) | Manifest generator that constructs the 6-resource Kubernetes stack with the embedded Starlark bootstrap logic and CEL validation. |
 | [`deploy_and_verify.star`](./deploy_and_verify.star) | End-to-end verification script that applies the stack to your cluster, waits for rollout availability, and verifies container logs and SHA-256 digests. |
-| [`Dockerfile`](./Dockerfile) | Optional container build definition for packaging the script into an immutable image for environments requiring signed artifacts. |
 
 ---
 
-## Step 1: Write the Concise Bootstrap Logic
+## Step 1: The Inline Bootstrap Logic
 
-The bootstrap logic handles four tasks: polling the dependency ConfigMap, validating required keys, rendering structured JSON, and writing the configuration along with its SHA-256 checksum.
-
-Examine [`init_bootstrap.star`](./init_bootstrap.star):
+Instead of maintaining a separate script file, the bootstrap logic is embedded directly in the Pod manifest as a concise Starlark snippet evaluated via `kite eval`:
 
 ```python
-#!/usr/bin/env kite
-
 def main():
-    ns = var_str("namespace", "init-demo")
-    out = fs.path(var_str("out.dir", "/work/shared"))
-
-    k = k8s.config(namespace=ns)
-    poll = retry.with_backoff(
-        lambda: k.try_get("configmap", "payment-api-settings"),
-        max_attempts=5,
-        delay="300ms",
-    )
-    if not poll.ok:
-        fail("dependency check failed for %s/payment-api-settings: %s" % (ns, poll.error))
-
-    data = poll.value.get("data", {})
+    k = k8s.config(namespace="init-demo")
+    cm = retry.with_backoff(lambda: k.try_get("configmap", "payment-api-settings"), max_attempts=5, delay="300ms")
+    if not cm.ok:
+        fail("configmap unavailable: %s" % cm.error)
+    data = cm.value.get("data", {})
     missing = [k for k in ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"] if not data.get(k)]
     if missing:
-        fail("missing required keys %s in ConfigMap payment-api-settings" % ", ".join(missing))
-
+        fail("missing required keys: %s" % ", ".join(missing))
     payload = json.encode({
         "service": "payment-api",
-        "namespace": ns,
-        "database": {
-            "host": data["DB_HOST"],
-            "port": int(data["DB_PORT"]),
-            "tls_mode": data["TLS_MODE"],
-        },
-        "limits": {
-            "rps": int(data["RATE_LIMIT_RPS"]),
-        },
+        "namespace": "init-demo",
+        "database": {"host": data["DB_HOST"], "port": int(data["DB_PORT"]), "tls_mode": data["TLS_MODE"]},
+        "limits": {"rps": int(data["RATE_LIMIT_RPS"])},
     })
-
+    out = fs.path("/work/shared")
     out.mkdir(parents=True)
     (out / "runtime-config.json").write_text(payload)
     (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\n")
 ```
 
-The script is short and focused:
+The inline script is under 20 lines and handles all requirements:
 
-- **Dual-Mode Kubernetes Client (`k8s.config`)**: Automatically uses `~/.kube/config` when run on a workstation, and switches to `rest.InClusterConfig()` when running inside a Kubernetes Pod.
-- **Exponential Backoff Polling (`retry.with_backoff`)**: Wraps `k.try_get` in a 5-attempt retry loop with exponential backoff and jitter, guarding against race conditions when workloads and ConfigMaps are applied simultaneously.
+- **Dual-Mode Kubernetes Client (`k8s.config`)**: In-cluster, `k8s.config()` automatically loads `rest.InClusterConfig()` using the Pod's mounted ServiceAccount token and CA cert.
+- **Exponential Backoff Polling (`retry.with_backoff`)**: Retries transient `NotFound` errors with backoff and jitter, guarding against race conditions when workloads and ConfigMaps are applied simultaneously.
 - **Single-Line Key Validation**: `[k for k in [...] if not data.get(k)]` catches both missing keys and empty strings without nested loops.
 - **Direct JSON & Checksum Output**: `json.encode` converts types (`port` and `rps` to integers), `hash.text(payload).sha256()` produces the digest, and `(out / "filename").write_text(...)` writes both files directly into `/work/shared`.
-- **Zero Logging Noise**: Adhering to the Unix philosophy, the script produces no output on success and exits `0`. If an error occurs, `fail(...)` terminates execution with a descriptive error message on stderr, signaling Kubernetes to stop Pod initialization.
+- **Zero Logging Noise**: The script produces no output on success and exits `0`. If an error occurs, `fail(...)` terminates execution with a descriptive error message on stderr, signaling Kubernetes to stop Pod initialization.
 
 ---
 
-## Step 2: Generate the Manifest Stack with `kite eval`
+## Step 2: Inspect and Generate the Kubernetes Manifest
 
-In traditional workflows, avoiding extra ConfigMaps meant resorting to shell scripts. With Starkite, [`generate_manifest.star`](./generate_manifest.star) embeds the bootstrap script directly into the `initContainers` specification using `command: ["kite", "eval"]`:
+In [`generate_manifest.star`](./generate_manifest.star), the bootstrap script is defined directly as an inline string inside the `Deployment` container definition:
 
 ```python
 #!/usr/bin/env kite
@@ -207,7 +186,6 @@ def build_stack(
     ns="init-demo",
     app_image="busybox:1.37",
     kite_image="ghcr.io/project-starkite/starkite:v0.11.8",
-    script_path="./init_bootstrap.star",
 ):
     sa = k8s.obj.service_account(
         name=app + "-sa",
@@ -244,12 +222,33 @@ def build_stack(
         capabilities={"drop": ["ALL"]},
     )
 
+    bootstrap_script = """def main():
+    k = k8s.config(namespace="%s")
+    cm = retry.with_backoff(lambda: k.try_get("configmap", "%s-settings"), max_attempts=5, delay="300ms")
+    if not cm.ok:
+        fail("configmap unavailable: %%s" %% cm.error)
+    data = cm.value.get("data", {})
+    missing = [k for k in ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"] if not data.get(k)]
+    if missing:
+        fail("missing required keys: %%s" %% ", ".join(missing))
+    payload = json.encode({
+        "service": "%s",
+        "namespace": "%s",
+        "database": {"host": data["DB_HOST"], "port": int(data["DB_PORT"]), "tls_mode": data["TLS_MODE"]},
+        "limits": {"rps": int(data["RATE_LIMIT_RPS"])},
+    })
+    out = fs.path("/work/shared")
+    out.mkdir(parents=True)
+    (out / "runtime-config.json").write_text(payload)
+    (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\\n")
+""" % (ns, app, app, ns)
+
     init_container = k8s.obj.container(
         name="config-bootstrap",
         image=kite_image,
         command=["kite", "eval"],
         args=[
-            fs.read_text(script_path),
+            bootstrap_script,
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
             "--sandbox-path-write=/work/shared",
             "--sandbox-net-allow",
@@ -272,7 +271,7 @@ def build_stack(
         command=[
             "sh",
             "-c",
-            "cat /etc/payment-api/runtime-config.json && echo '' && cat /etc/payment-api/runtime-config.sha256 && sleep 3600",
+            "cat /etc/%s/runtime-config.json && echo '' && cat /etc/%s/runtime-config.sha256 && sleep 3600" % (app, app),
         ],
         ports=[k8s.obj.container_port(container_port=8080, name="http")],
         security_context=non_root,
@@ -281,7 +280,7 @@ def build_stack(
             limits={"cpu": "500m", "memory": "256Mi"},
         ),
         volume_mounts=[
-            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/payment-api", read_only=True),
+            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/" + app, read_only=True),
         ],
     )
 
@@ -312,7 +311,6 @@ def main():
         ns=var_str("namespace", "init-demo"),
         app_image=var_str("image", "busybox:1.37"),
         kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
-        script_path=var_str("script.path", "./init_bootstrap.star"),
     )
     print(k8s.yaml(stack))
 ```
@@ -320,10 +318,10 @@ def main():
 Generate [`manifest.yaml`](./manifest.yaml):
 
 ```bash
-kite run ./generate_manifest.star --sandbox-path-read=. > ./manifest.yaml
+kite run ./generate_manifest.star > ./manifest.yaml
 ```
 
-Inspect the `Deployment` in the generated [`manifest.yaml`](./manifest.yaml):
+Inspect the `Deployment` section of [`manifest.yaml`](./manifest.yaml):
 
 ```yaml
 apiVersion: apps/v1
@@ -375,39 +373,22 @@ spec:
       initContainers:
         - args:
             - |
-              #!/usr/bin/env kite
-
               def main():
-                  ns = var_str("namespace", "init-demo")
-                  out = fs.path(var_str("out.dir", "/work/shared"))
-
-                  k = k8s.config(namespace=ns)
-                  poll = retry.with_backoff(
-                      lambda: k.try_get("configmap", "payment-api-settings"),
-                      max_attempts=5,
-                      delay="300ms",
-                  )
-                  if not poll.ok:
-                      fail("dependency check failed for %s/payment-api-settings: %s" % (ns, poll.error))
-
-                  data = poll.value.get("data", {})
+                  k = k8s.config(namespace="init-demo")
+                  cm = retry.with_backoff(lambda: k.try_get("configmap", "payment-api-settings"), max_attempts=5, delay="300ms")
+                  if not cm.ok:
+                      fail("configmap unavailable: %s" % cm.error)
+                  data = cm.value.get("data", {})
                   missing = [k for k in ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"] if not data.get(k)]
                   if missing:
-                      fail("missing required keys %s in ConfigMap payment-api-settings" % ", ".join(missing))
-
+                      fail("missing required keys: %s" % ", ".join(missing))
                   payload = json.encode({
                       "service": "payment-api",
-                      "namespace": ns,
-                      "database": {
-                          "host": data["DB_HOST"],
-                          "port": int(data["DB_PORT"]),
-                          "tls_mode": data["TLS_MODE"],
-                      },
-                      "limits": {
-                          "rps": int(data["RATE_LIMIT_RPS"]),
-                      },
+                      "namespace": "init-demo",
+                      "database": {"host": data["DB_HOST"], "port": int(data["DB_PORT"]), "tls_mode": data["TLS_MODE"]},
+                      "limits": {"rps": int(data["RATE_LIMIT_RPS"])},
                   })
-
+                  out = fs.path("/work/shared")
                   out.mkdir(parents=True)
                   (out / "runtime-config.json").write_text(payload)
                   (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\n")
@@ -470,7 +451,6 @@ def main():
         app=app,
         ns=ns,
         kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
-        script_path=var_str("script.path", "./init_bootstrap.star"),
     )
     k.apply(stack, force=True)
 
@@ -584,37 +564,3 @@ Re-applying `manifest.yaml` restores `TLS_MODE: strict` to the `ConfigMap` and a
 ```bash
 kubectl apply -f ./manifest.yaml
 ```
-
----
-
-## Alternative: Self-Contained Immutable Image (`Dockerfile`)
-
-While inline `kite eval` provides zero-ceremony deployment for most workloads, regulated enterprise environments sometimes prohibit inline script execution in manifests and mandate that all executable code be packaged into signed, immutable container images.
-
-Because `ghcr.io/project-starkite/starkite:v0.11.8` includes the `kite` binary and CA certificates on a minimal rootfs, [`Dockerfile`](./Dockerfile) needs only a single `COPY` layer:
-
-```dockerfile
-FROM ghcr.io/project-starkite/starkite:v0.11.8
-
-COPY init_bootstrap.star /scripts/init_bootstrap.star
-
-USER 65532:65532
-ENTRYPOINT ["kite", "run", "/scripts/init_bootstrap.star"]
-CMD [ \
-    "--sandbox-path-read=/scripts", \
-    "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount", \
-    "--sandbox-path-write=/work/shared", \
-    "--sandbox-net-allow", \
-    "--env=KUBERNETES_SERVICE_HOST", \
-    "--env=KUBERNETES_SERVICE_PORT" \
-]
-```
-
-Build the custom init image and load it into your cluster:
-
-```bash
-docker build -t payment-api-init:v0.1.0 .
-kind load docker-image payment-api-init:v0.1.0
-```
-
-When using `payment-api-init:v0.1.0`, the Pod runs `kite run /scripts/init_bootstrap.star` directly from the immutable container filesystem.
