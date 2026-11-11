@@ -4,7 +4,6 @@ metadata:
   name: init-demo
 ---
 apiVersion: v1
-automountServiceAccountToken: true
 kind: ServiceAccount
 metadata:
   name: payment-api-sa
@@ -49,6 +48,51 @@ metadata:
   name: payment-api-settings
   namespace: init-demo
 ---
+apiVersion: v1
+data:
+  init_bootstrap.star: |
+    #!/usr/bin/env kite
+
+    REQUIRED_KEYS = ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"]
+
+    def validate_keys(data):
+        return [k for k in REQUIRED_KEYS if not data.get(k)]
+
+    def render_config(ns, data):
+        return {
+            "service": "payment-api",
+            "namespace": ns,
+            "database": {
+                "host": data["DB_HOST"],
+                "port": int(data["DB_PORT"]),
+                "tls_mode": data["TLS_MODE"],
+            },
+            "limits": {
+                "rps": int(data["RATE_LIMIT_RPS"]),
+            },
+        }
+
+    def main():
+        ns = var_str("namespace", "init-demo")
+        out = fs.path(var_str("out.dir", "/work/shared"))
+
+        k = k8s.config(namespace=ns)
+        cm = k.get("configmap", "payment-api-settings")
+
+        data = cm.get("data", {})
+        missing = validate_keys(data)
+        if missing:
+            fail("missing required keys: %s" % ", ".join(missing))
+
+        payload = json.encode(render_config(ns, data))
+        out.mkdir(parents=True)
+        (out / "runtime-config.json").write_text(payload)
+        (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\n")
+kind: ConfigMap
+metadata:
+  name: payment-api-init-script
+  namespace: init-demo
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -77,75 +121,33 @@ spec:
             - containerPort: 8080
               name: http
               protocol: TCP
-          resources:
-            limits:
-              cpu: 500m
-              memory: 256Mi
-            requests:
-              cpu: 100m
-              memory: 128Mi
-          securityContext:
-            capabilities:
-              drop:
-                - ALL
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
           volumeMounts:
             - mountPath: /etc/payment-api
               name: shared-config
               readOnly: true
       initContainers:
         - args:
-            - |
-              def main():
-                  k = k8s.config(namespace="init-demo")
-                  cm = retry.with_backoff(lambda: k.try_get("configmap", "payment-api-settings"), max_attempts=5, delay="300ms")
-                  if not cm.ok:
-                      fail("configmap unavailable: %s" % cm.error)
-                  data = cm.value.get("data", {})
-                  missing = [k for k in ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"] if not data.get(k)]
-                  if missing:
-                      fail("missing required keys: %s" % ", ".join(missing))
-                  payload = json.encode({
-                      "service": "payment-api",
-                      "namespace": "init-demo",
-                      "database": {"host": data["DB_HOST"], "port": int(data["DB_PORT"]), "tls_mode": data["TLS_MODE"]},
-                      "limits": {"rps": int(data["RATE_LIMIT_RPS"])},
-                  })
-                  out = fs.path("/work/shared")
-                  out.mkdir(parents=True)
-                  (out / "runtime-config.json").write_text(payload)
-                  (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\n")
+            - run
+            - /scripts/init_bootstrap.star
+            - --sandbox-path-read=/scripts
             - --sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount
             - --sandbox-path-write=/work/shared
             - --sandbox-net-allow
             - --env=KUBERNETES_SERVICE_HOST
             - --env=KUBERNETES_SERVICE_PORT
-          command:
-            - kite
-            - eval
           image: ghcr.io/project-starkite/starkite:v0.11.8
           name: config-bootstrap
-          resources:
-            limits:
-              cpu: 100m
-              memory: 64Mi
-            requests:
-              cpu: 25m
-              memory: 32Mi
-          securityContext:
-            capabilities:
-              drop:
-                - ALL
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
           volumeMounts:
             - mountPath: /work/shared
               name: shared-config
+            - mountPath: /scripts
+              name: bootstrap-script
+              readOnly: true
       serviceAccountName: payment-api-sa
       volumes:
         - emptyDir: {}
           name: shared-config
+        - configMap:
+            name: payment-api-init-script
+          name: bootstrap-script
 

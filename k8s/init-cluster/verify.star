@@ -1,22 +1,14 @@
 #!/usr/bin/env kite
 
-load("./generate_manifest.star", "generate_manifest")
-
 def main():
     app = var_str("app", "payment-api")
     ns = var_str("namespace", "init-demo")
 
     k = k8s.config(namespace=ns, timeout="30s")
-    stack = generate_manifest.build_stack(
-        app=app,
-        ns=ns,
-        kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
-    )
-    k.apply(stack, force=True)
 
-    ready = k.wait_for("deployment", app, condition="Available", timeout="90s")
+    ready = k.wait_for("deployment", app, condition="Available", timeout="60s")
     if not ready.ready:
-        fail("deployment %s did not become Available: %s" % (app, ready.message))
+        fail("deployment %s not available: %s" % (app, ready.message))
 
     pods = [p for p in k.list("pods", labels="app=" + app) if p.status.phase == "Running"]
     if not pods:
@@ -34,7 +26,6 @@ def main():
     parsed = json.decode(raw_json)
 
     tbl = table.new(["Check", "Target", "Result"])
-    tbl.add_row("Manifest Stack Apply", ns + "/" + app, "APPLIED (%d resources)" % len(stack))
     tbl.add_row("Deployment Readiness", "deployment/" + app, "AVAILABLE (%d pods)" % len(pods))
     tbl.add_row("Database Endpoint", "%s:%d" % (parsed["database"]["host"], int(parsed["database"]["port"])), "VERIFIED")
     tbl.add_row("Rate Limit (RPS)", str(int(parsed["limits"]["rps"])), "VERIFIED")

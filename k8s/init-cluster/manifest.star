@@ -6,11 +6,7 @@ def build_stack(
     app_image="busybox:1.37",
     kite_image="ghcr.io/project-starkite/starkite:v0.11.8",
 ):
-    sa = k8s.obj.service_account(
-        name=app + "-sa",
-        namespace=ns,
-        automount_service_account_token=True,
-    )
+    sa = k8s.obj.service_account(name=app + "-sa", namespace=ns)
     role_name = app + "-config-reader"
     role = k8s.obj.role(
         name=role_name,
@@ -33,54 +29,29 @@ def build_stack(
             "TLS_MODE": "strict",
         },
     )
-
-    non_root = k8s.obj.security_context(
-        run_as_non_root=True,
-        run_as_user=65532,
-        read_only_root=True,
-        capabilities={"drop": ["ALL"]},
+    script_path = var_str("script", "./init_bootstrap.star")
+    script_cm = k8s.obj.config_map(
+        name=app + "-init-script",
+        namespace=ns,
+        data={"init_bootstrap.star": fs.read_text(script_path)},
     )
-
-    bootstrap_script = """def main():
-    k = k8s.config(namespace="%s")
-    cm = retry.with_backoff(lambda: k.try_get("configmap", "%s-settings"), max_attempts=5, delay="300ms")
-    if not cm.ok:
-        fail("configmap unavailable: %%s" %% cm.error)
-    data = cm.value.get("data", {})
-    missing = [k for k in ["DB_HOST", "DB_PORT", "RATE_LIMIT_RPS", "TLS_MODE"] if not data.get(k)]
-    if missing:
-        fail("missing required keys: %%s" %% ", ".join(missing))
-    payload = json.encode({
-        "service": "%s",
-        "namespace": "%s",
-        "database": {"host": data["DB_HOST"], "port": int(data["DB_PORT"]), "tls_mode": data["TLS_MODE"]},
-        "limits": {"rps": int(data["RATE_LIMIT_RPS"])},
-    })
-    out = fs.path("/work/shared")
-    out.mkdir(parents=True)
-    (out / "runtime-config.json").write_text(payload)
-    (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\\n")
-""" % (ns, app, app, ns)
 
     init_container = k8s.obj.container(
         name="config-bootstrap",
         image=kite_image,
-        command=["kite", "eval"],
         args=[
-            bootstrap_script,
+            "run",
+            "/scripts/init_bootstrap.star",
+            "--sandbox-path-read=/scripts",
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
             "--sandbox-path-write=/work/shared",
             "--sandbox-net-allow",
             "--env=KUBERNETES_SERVICE_HOST",
             "--env=KUBERNETES_SERVICE_PORT",
         ],
-        security_context=non_root,
-        resources=k8s.obj.resource_requirements(
-            requests={"cpu": "25m", "memory": "32Mi"},
-            limits={"cpu": "100m", "memory": "64Mi"},
-        ),
         volume_mounts=[
             k8s.obj.volume_mount(name="shared-config", mount_path="/work/shared"),
+            k8s.obj.volume_mount(name="bootstrap-script", mount_path="/scripts", read_only=True),
         ],
     )
 
@@ -93,11 +64,6 @@ def build_stack(
             "cat /etc/%s/runtime-config.json && echo '' && cat /etc/%s/runtime-config.sha256 && sleep 3600" % (app, app),
         ],
         ports=[k8s.obj.container_port(container_port=8080, name="http")],
-        security_context=non_root,
-        resources=k8s.obj.resource_requirements(
-            requests={"cpu": "100m", "memory": "128Mi"},
-            limits={"cpu": "500m", "memory": "256Mi"},
-        ),
         volume_mounts=[
             k8s.obj.volume_mount(name="shared-config", mount_path="/etc/" + app, read_only=True),
         ],
@@ -113,22 +79,15 @@ def build_stack(
         containers=[app_container],
         volumes=[
             k8s.obj.volume(name="shared-config", empty_dir=True),
+            k8s.obj.volume(name="bootstrap-script", config_map=script_cm),
         ],
     )
 
-    k8s.validate(
-        manifest=dep,
-        expression="object.spec.template.spec.initContainers.all(c, c.securityContext.runAsNonRoot == true && c.securityContext.readOnlyRootFilesystem == true)",
-        strict=True,
-    )
-
-    return [k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, dep]
+    return [k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, script_cm, dep]
 
 def main():
     stack = build_stack(
         app=var_str("app", "payment-api"),
         ns=var_str("namespace", "init-demo"),
-        app_image=var_str("image", "busybox:1.37"),
-        kite_image=var_str("kite.image", "ghcr.io/project-starkite/starkite:v0.11.8"),
     )
     print(k8s.yaml(stack))

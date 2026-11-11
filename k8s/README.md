@@ -54,7 +54,7 @@ This directory contains standalone Starlark tutorials demonstrating the 3-tier a
 | [`12-multi-protocol-onboarding.star`](./12-multi-protocol-onboarding.star) | Platform | Multi-Protocol Tenant Onboarding & Last-Mile Delivery | `sql.open()`, `db.tx()`, `defer()`, `k8s.obj.*`, `k8s.apply()`, `k8s.yaml()` |
 | [`kubeadm-cluster/`](./kubeadm-cluster/) | Infra | Upstream Kubernetes Cluster Lifecycle & Day-2 Management (Lima VMs) | `template.file()`, `concur.map()`, `limactl`, `k8s.wait_for()`, `k8s.cordon/drain` |
 | [`k3s-bootstrap/`](./k3s-bootstrap/) | Infra | Multi-Node k3s Cluster Provisioning over SSH | `ssh.config()`, jump host proxying, token extraction |
-| [`init-cluster/`](./init-cluster/) | Workload | Sandboxed Kubernetes Init Containers & Configuration Bootstrap | `k8s.config()`, `retry.with_backoff()`, `k8s.obj.*`, `kite eval` |
+| [`init-cluster/`](./init-cluster/) | Workload | Sandboxed Kubernetes Init Containers & Configuration Bootstrap | `k8s.config()`, `k.get()`, `k8s.obj.*`, `kite test` |
 
 ---
 
@@ -351,20 +351,23 @@ kite run . --action status
 
 ### 14. Sandboxed Kubernetes Init Containers (`init-cluster/`)
 
-Demonstrates how to configure and deploy zero-ceremony Kubernetes `initContainers` using `ghcr.io/project-starkite/starkite:v0.11.8` and `kite eval` instead of shell utility images:
-- **Concise Bootstrap Logic**: Combines ConfigMap polling, required key validation, JSON rendering, and SHA-256 integrity calculation without excessive logging.
-- **Zero-Ceremony Inline Execution**: Embeds Starlark logic directly into the Deployment manifest with `command: ["kite", "eval"]`, eliminating extra script ConfigMaps and volume mounts.
-- **Default-Deny Sandboxing**: Restricts filesystem and network access to only what the bootstrap requires while scrubbing ambient environment variables.
-- **Live Cluster Verification**: Applies the 6-resource stack to an active cluster, waits for rollout availability, and verifies container logs and SHA-256 checksums (`deploy_and_verify.star`).
+Demonstrates how to write, unit-test, and deploy Kubernetes `initContainers` using `ghcr.io/project-starkite/starkite:v0.11.8` instead of shell utility images:
+- **Simple Init Script**: Retrieves configuration from the Kubernetes API, validates required keys, and writes typed JSON configuration and SHA-256 digest (`init_bootstrap.star`).
+- **Offline Unit Testing**: Verifies key validation and configuration rendering logic offline via `kite test` (`init_bootstrap_test.star`).
+- **Declarative Manifest Generation**: Generates the complete Kubernetes stack without YAML boilerplate (`manifest.star`), deployable directly via `kubectl apply -f -`.
+- **Live Cluster Verification**: Uses `k8s.wait_for` to poll for Deployment availability and verifies container logs and SHA-256 integrity (`verify.star`).
 
 ```bash
 cd init-cluster/
 
-# Generate full Kubernetes manifest stack:
-kite run ./generate_manifest.star --sandbox-path-read=. > ./manifest.yaml
+# Run offline unit tests:
+kite test ./init_bootstrap_test.star --sandbox-path-read=.
 
-# Deploy and verify against an active cluster:
-kite run ./deploy_and_verify.star \
+# Generate and apply Kubernetes manifests:
+kite run ./manifest.star --sandbox-path-read=. | kubectl apply -f -
+
+# Verify deployment against an active cluster:
+kite run ./verify.star \
   --sandbox-path-read=. \
   --sandbox-path-read=$HOME/.kube \
   --sandbox-net-allow \
