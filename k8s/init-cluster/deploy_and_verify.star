@@ -24,7 +24,6 @@ def main():
         fail("no running pods found for app=%s" % app)
     pod_name = pods[0].metadata.name
 
-    init_logs = k.logs(pod_name, container="config-bootstrap").strip()
     app_lines = k.logs(pod_name, container=app).strip().split("\n")
     raw_json = app_lines[0]
     recorded_digest = app_lines[1].split(" ")[0]
@@ -34,12 +33,10 @@ def main():
         fail("digest mismatch: actual=%s recorded=%s" % (actual_digest, recorded_digest))
 
     parsed = json.decode(raw_json)
-    print(init_logs + "\n")
 
     tbl = table.new(["Check", "Target", "Result"])
     tbl.add_row("Manifest Stack Apply", ns + "/" + app, "APPLIED (%d resources)" % len(stack))
     tbl.add_row("Deployment Readiness", "deployment/" + app, "AVAILABLE (%d pods)" % len(pods))
-    tbl.add_row("Init Container Logs", pod_name + "/config-bootstrap", "COMPLETED")
     tbl.add_row("Database Endpoint", "%s:%d" % (parsed["database"]["host"], int(parsed["database"]["port"])), "VERIFIED")
     tbl.add_row("Rate Limit (RPS)", str(int(parsed["limits"]["rps"])), "VERIFIED")
     tbl.add_row("SHA-256 Integrity", actual_digest[:16] + "...", "MATCHED")

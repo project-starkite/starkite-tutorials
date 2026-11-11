@@ -34,11 +34,6 @@ def build_stack(
             "TLS_MODE": "strict",
         },
     )
-    script_cm = k8s.obj.config_map(
-        name=app + "-init-script",
-        namespace=ns,
-        data={"init_bootstrap.star": fs.read_text(script_path)},
-    )
 
     non_root = k8s.obj.security_context(
         run_as_non_root=True,
@@ -50,17 +45,14 @@ def build_stack(
     init_container = k8s.obj.container(
         name="config-bootstrap",
         image=kite_image,
+        command=["kite", "eval"],
         args=[
-            "run",
-            "/scripts/init_bootstrap.star",
-            "--sandbox-path-read=/scripts",
+            fs.read_text(script_path),
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
             "--sandbox-path-write=/work/shared",
             "--sandbox-net-allow",
             "--env=KUBERNETES_SERVICE_HOST",
             "--env=KUBERNETES_SERVICE_PORT",
-            "--var=namespace=" + ns,
-            "--var=out.dir=/work/shared",
         ],
         security_context=non_root,
         resources=k8s.obj.resource_requirements(
@@ -69,7 +61,6 @@ def build_stack(
         ),
         volume_mounts=[
             k8s.obj.volume_mount(name="shared-config", mount_path="/work/shared"),
-            k8s.obj.volume_mount(name="bootstrap-script", mount_path="/scripts", read_only=True),
         ],
     )
 
@@ -102,7 +93,6 @@ def build_stack(
         containers=[app_container],
         volumes=[
             k8s.obj.volume(name="shared-config", empty_dir=True),
-            k8s.obj.volume(name="bootstrap-script", config_map=script_cm),
         ],
     )
 
@@ -112,7 +102,7 @@ def build_stack(
         strict=True,
     )
 
-    return [k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, script_cm, dep]
+    return [k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, dep]
 
 def main():
     stack = build_stack(
