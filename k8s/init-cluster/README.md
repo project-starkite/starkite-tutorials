@@ -342,6 +342,27 @@ kite run ./manifest.star --sandbox-path-read=. > ./manifest.yaml
 kubectl apply -f ./manifest.yaml
 ```
 
+When rendered to [`manifest.yaml`](./manifest.yaml), `k8s.yaml` automatically serializes the multi-line Starlark string using the standard YAML literal block marker (`|`):
+
+```yaml
+containers:
+  - name: payment-api
+    image: ghcr.io/project-starkite/starkite:v0.11.8
+    command:
+      - kite
+      - eval
+    args:
+      - |
+        def main():
+            cfg = fs.read_text("/etc/payment-api/runtime-config.json")
+            sha = fs.read_text("/etc/payment-api/runtime-config.sha256")
+            print(cfg)
+            print(sha)
+            http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
+      - --sandbox-path-read=/etc/payment-api
+      - --sandbox-net-allow
+```
+
 ```text
 # (host-specific values differ)
 namespace/init-demo created
