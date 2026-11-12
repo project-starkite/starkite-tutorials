@@ -54,26 +54,24 @@ def build_stack(
         ],
     )
 
-    web_script = """def main():
-    cfg = fs.read_text("/etc/%s/runtime-config.json")
-    sha = fs.read_text("/etc/%s/runtime-config.sha256")
-    print(cfg)
-    print(sha)
-    http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
-""" % (app, app)
-
     app_container = k8s.obj.container(
         name=app,
         image=kite_image,
         command=["kite", "eval"],
         args=[
-            web_script,
-            "--sandbox-path-read=/etc/" + app,
+            """def main():
+    cfg = fs.read_text("/etc/payment-api/runtime-config.json")
+    sha = fs.read_text("/etc/payment-api/runtime-config.sha256")
+    print(cfg)
+    print(sha)
+    http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
+""",
+            "--sandbox-path-read=/etc/payment-api",
             "--sandbox-net-allow",
         ],
         ports=[k8s.obj.container_port(container_port=8080, name="http")],
         volume_mounts=[
-            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/" + app, read_only=True),
+            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/payment-api", read_only=True),
         ],
     )
 
