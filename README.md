@@ -87,6 +87,7 @@ Tutorials covering the 3-tier architecture of Starkite's `k8s` module, from reso
 * [`kubeadm-cluster/`](k8s/kubeadm-cluster/): Upstream Kubernetes cluster lifecycle, Day-2 scaling, and rolling upgrades via Lima VMs.
 * [`k3s-bootstrap/`](k8s/k3s-bootstrap/): Multi-node k3s cluster provisioning via SSH jump host orchestration.
 * [`init-cluster/`](k8s/init-cluster/): Sandboxed Kubernetes init containers with unit testing, Starlark manifest generation, and zero-trust runtime confinement.
+* [`init-cluster-lock/`](k8s/init-cluster-lock/): Distributed database migrations across multi-replica init containers coordinated via Kubernetes `Lease` locking and PostgreSQL transactions.
 
 ### 2. Model Context Protocol (`mcp/`)
 

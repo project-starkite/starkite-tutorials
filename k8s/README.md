@@ -55,6 +55,7 @@ This directory contains standalone Starlark tutorials demonstrating the 3-tier a
 | [`kubeadm-cluster/`](./kubeadm-cluster/) | Infra | Upstream Kubernetes Cluster Lifecycle & Day-2 Management (Lima VMs) | `template.file()`, `concur.map()`, `limactl`, `k8s.wait_for()`, `k8s.cordon/drain` |
 | [`k3s-bootstrap/`](./k3s-bootstrap/) | Infra | Multi-Node k3s Cluster Provisioning over SSH | `ssh.config()`, jump host proxying, token extraction |
 | [`init-cluster/`](./init-cluster/) | Workload | Sandboxed Kubernetes Init Containers & Configuration Bootstrap | `k8s.config()`, `k.get()`, `k8s.obj.*`, `kite test` |
+| [`init-cluster-lock/`](./init-cluster-lock/) | Workload | Lease-Coordinated Init Container Database Migrations | `k8s.config()`, `coordination.k8s.io/v1` `Lease`, `sql.open()`, `db.tx()`, `retry.do()`, `kite test` |
 
 ---
 
@@ -367,6 +368,33 @@ kite test ./init_bootstrap_test.star --sandbox-path-read=.
 kite run ./manifest.star --sandbox-path-read=. | kubectl apply -f -
 
 # Verify deployment against an active cluster:
+kite run ./verify.star \
+  --sandbox-path-read=. \
+  --sandbox-path-read=$HOME/.kube \
+  --sandbox-net-allow \
+  --env=HOME
+```
+
+---
+
+### 15. Lease-Coordinated Init Container Migrations (`init-cluster-lock/`)
+
+Demonstrates distributed schema migration coordination across multi-replica Kubernetes `initContainers` using `coordination.k8s.io/v1` `Lease` locking and transactional PostgreSQL execution:
+- **Distributed Lease Lock & DDL Execution**: Elects a single migration leader across concurrent Pod replicas via `Lease` compare-and-swap while follower replicas poll `schema_migrations` (`init_lock_bootstrap.star`).
+- **Offline Unit Testing**: Verifies Lease evaluation, expiration takeover, and migration version checks offline via `kite test` (`init_lock_bootstrap_test.star`).
+- **Declarative Stack Generation**: Generates Namespace, RBAC `Role`/`RoleBinding`, PostgreSQL 16, and a 3-replica `payment-api` `Deployment` (`manifest.star` / `manifest.yaml`).
+- **End-to-End Cluster & SQL Verification**: Asserts 1-leader / 2-follower init logs and inspects live PostgreSQL tables over `k.port_forward` (`verify.star`).
+
+```bash
+cd init-cluster-lock/
+
+# Run offline unit tests:
+kite test ./init_lock_bootstrap_test.star --sandbox-path-read=.
+
+# Apply stack to cluster:
+kubectl apply -f ./manifest.yaml
+
+# Verify leader/follower coordination and PostgreSQL schema:
 kite run ./verify.star \
   --sandbox-path-read=. \
   --sandbox-path-read=$HOME/.kube \
