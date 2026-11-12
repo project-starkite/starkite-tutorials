@@ -223,9 +223,22 @@ Time:  4ms
 
 ---
 
-## Step 3: Generate Manifest and Deploy with `kubectl`
+## Step 3: Application Server and Manifest Generation
 
-[`manifest.star`](./manifest.star) constructs the complete Kubernetes stack (`Namespace`, `ServiceAccount`, `Role`, `RoleBinding`, settings `ConfigMap`, script `ConfigMap`, and `Deployment`) and outputs multi-document YAML:
+The application container runs [`server.star`](./server.star) via `kite eval`. It reads the generated runtime configuration, prints the JSON payload and SHA-256 integrity checksum to stdout, and serves the configuration over HTTP on port 8080:
+
+```python
+#!/usr/bin/env kite
+
+def main():
+    cfg = fs.read_text("/etc/payment-api/runtime-config.json")
+    sha = fs.read_text("/etc/payment-api/runtime-config.sha256")
+    print(cfg)
+    print(sha)
+    http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
+```
+
+[`manifest.star`](./manifest.star) constructs the complete Kubernetes stack (`Namespace`, `ServiceAccount`, `Role`, `RoleBinding`, settings `ConfigMap`, script `ConfigMap`, and `Deployment`) and outputs multi-document YAML. It reads both `init_bootstrap.star` and `server.star` using `fs.read_text()`, avoiding inline multi-line string escaping or indentation hazards:
 
 ```python
 #!/usr/bin/env kite
@@ -264,6 +277,7 @@ def build_stack(
         namespace=ns,
         data={"init_bootstrap.star": fs.read_text(script_path)},
     )
+    server_script_path = var_str("server_script", "./server.star")
 
     init_container = k8s.obj.container(
         name="config-bootstrap",
@@ -289,13 +303,7 @@ def build_stack(
         image=kite_image,
         command=["kite", "eval"],
         args=[
-            """def main():
-    cfg = fs.read_text("/etc/payment-api/runtime-config.json")
-    sha = fs.read_text("/etc/payment-api/runtime-config.sha256")
-    print(cfg)
-    print(sha)
-    http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
-""",
+            fs.read_text(server_script_path),
             "--sandbox-path-read=/etc/payment-api",
             "--sandbox-net-allow",
         ],
@@ -353,6 +361,8 @@ containers:
       - eval
     args:
       - |
+        #!/usr/bin/env kite
+
         def main():
             cfg = fs.read_text("/etc/payment-api/runtime-config.json")
             sha = fs.read_text("/etc/payment-api/runtime-config.sha256")

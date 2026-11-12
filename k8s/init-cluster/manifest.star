@@ -34,6 +34,7 @@ def build_stack(
         namespace=ns,
         data={"init_bootstrap.star": fs.read_text(script_path)},
     )
+    server_script_path = var_str("server_script", "./server.star")
 
     init_container = k8s.obj.container(
         name="config-bootstrap",
@@ -59,13 +60,7 @@ def build_stack(
         image=kite_image,
         command=["kite", "eval"],
         args=[
-            """def main():
-    cfg = fs.read_text("/etc/payment-api/runtime-config.json")
-    sha = fs.read_text("/etc/payment-api/runtime-config.sha256")
-    print(cfg)
-    print(sha)
-    http.serve({"GET /": lambda req: {"status": 200, "headers": {"Content-Type": "application/json"}, "body": cfg}}, port=8080)
-""",
+            fs.read_text(server_script_path),
             "--sandbox-path-read=/etc/payment-api",
             "--sandbox-net-allow",
         ],
