@@ -117,7 +117,7 @@ spec:
 
               def main():
                   ns = "init-demo"
-                  out = fs.path("/work/shared")
+                  out = fs.path("/etc/payment-api")
 
                   k = k8s.config(namespace=ns)
                   cm = k.get("configmap", "payment-api-settings")
@@ -132,7 +132,7 @@ spec:
                   (out / "runtime-config.json").write_text(payload)
                   (out / "runtime-config.sha256").write_text(hash.text(payload).sha256() + "  runtime-config.json\n")
             - --sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount
-            - --sandbox-path-write=/work/shared
+            - --sandbox-path-write=/etc/payment-api
             - --sandbox-net-allow
             - --env=KUBERNETES_SERVICE_HOST
             - --env=KUBERNETES_SERVICE_PORT
@@ -142,7 +142,7 @@ spec:
           image: ghcr.io/project-starkite/starkite:v0.11.8
           name: config-bootstrap
           volumeMounts:
-            - mountPath: /work/shared
+            - mountPath: /etc/payment-api
               name: shared-config
       serviceAccountName: payment-api-sa
       volumes:

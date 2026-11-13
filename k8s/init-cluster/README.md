@@ -8,7 +8,7 @@ Starkite (`kite`) replaces the shell scripts and utility images in that startup 
 
 ## Why Shell Init Containers Break Down
 
-Consider a `payment-api` Deployment that needs configuration from a `ConfigMap` named `payment-api-settings` before its HTTP server starts. The init container must check four required keys (`DB_HOST`, `DB_PORT`, `RATE_LIMIT_RPS`, and `TLS_MODE`), parse `DB_PORT` and `RATE_LIMIT_RPS` as integers, write `/work/shared/runtime-config.json`, and write a SHA-256 checksum to `/work/shared/runtime-config.sha256`.
+Consider a `payment-api` Deployment that needs configuration from a `ConfigMap` named `payment-api-settings` before its HTTP server starts. The init container must check four required keys (`DB_HOST`, `DB_PORT`, `RATE_LIMIT_RPS`, and `TLS_MODE`), parse `DB_PORT` and `RATE_LIMIT_RPS` as integers, write `/etc/payment-api/runtime-config.json`, and write a SHA-256 checksum to `/etc/payment-api/runtime-config.sha256`.
 
 In a typical Pod spec, you mount a shared `emptyDir` volume, bind a `ServiceAccount` with read access to `configmaps`, and embed an inline `/bin/sh -c` script inside an image like `alpine/k8s`:
 
@@ -31,7 +31,7 @@ initContainers:
           fi
         done
 
-        cd /work/shared
+        cd /etc/payment-api
         printf '%s\n' "$cm_json" | jq -c '{
           service: "payment-api",
           namespace: "init-demo",
@@ -47,7 +47,7 @@ initContainers:
         sha256sum runtime-config.json > runtime-config.sha256
     volumeMounts:
       - name: shared-config
-        mountPath: /work/shared
+        mountPath: /etc/payment-api
 ```
 
 That script works for a small prototype, then creates friction as the service grows:
@@ -90,7 +90,7 @@ sequenceDiagram
     Init->>API: k.get("configmap", "payment-api-settings")
     API-->>Init: Return ConfigMap data
     Init->>Init: validate_keys(), render_config(), hash.text().sha256()
-    Init->>Vol: Write /work/shared/runtime-config.json & runtime-config.sha256
+    Init->>Vol: Write /etc/payment-api/runtime-config.json & runtime-config.sha256
     Init-->>Kubelet: Exit 0
     Kubelet->>App: kite eval <server.star>
     App->>Vol: Read /etc/payment-api/runtime-config.json & runtime-config.sha256
@@ -102,7 +102,7 @@ sequenceDiagram
 When `kite eval` starts inside `config-bootstrap`, Starkite begins under the `deny-all` profile. Filesystem paths, network sockets, subprocess execution, and environment variables stay blocked unless granted via CLI flags:
 
 - `--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount`: Lets `k8s.config()` read the Pod's projected ServiceAccount token and cluster `ca.crt`.
-- `--sandbox-path-write=/work/shared`: Restricts writes to the `shared-config` `emptyDir` mount where `runtime-config.json` and `runtime-config.sha256` live.
+- `--sandbox-path-write=/etc/payment-api`: Restricts writes to the `shared-config` `emptyDir` mount where `runtime-config.json` and `runtime-config.sha256` live.
 - `--sandbox-net-allow`: Permits outbound HTTPS calls to the Kubernetes API server.
 - `--env=KUBERNETES_SERVICE_HOST` and `--env=KUBERNETES_SERVICE_PORT`: Forwards only the two discovery variables required by `InClusterConfig`, scrubbing all other environment variables.
 
@@ -166,7 +166,7 @@ def render_config(ns, data):
 
 def main():
     ns = "init-demo"
-    out = fs.path("/work/shared")
+    out = fs.path("/etc/payment-api")
 
     k = k8s.config(namespace=ns)
     cm = k.get("configmap", "payment-api-settings")
@@ -188,7 +188,7 @@ Each part of the script handles one startup responsibility:
 - **Typed Rendering (`render_config`)**: Kubernetes `ConfigMap` entries are always stored as strings. Converting `int(data["DB_PORT"])` and `int(data["RATE_LIMIT_RPS"])` during initialization catches non-numeric values before the main container starts.
 - **In-Cluster Client (`k8s.config` & `k.get`)**: When running inside a Pod, `k8s.config(namespace=ns)` loads the mounted ServiceAccount credentials (`InClusterConfig`) automatically and retrieves `payment-api-settings` from the API server.
 - **Fail-Fast Exit (`fail`)**: If any required key is missing, `fail(...)` terminates the process immediately with a non-zero exit code and prints the missing key names to stderr.
-- **JSON Output & Checksum (`json.encode` & `hash.text`)**: Encodes the dictionary to JSON, writes `runtime-config.json` into `/work/shared`, and writes a `sha256sum`-compatible digest file (`<digest>  runtime-config.json\n`).
+- **JSON Output & Checksum (`json.encode` & `hash.text`)**: Encodes the dictionary to JSON, writes `runtime-config.json` into `/etc/payment-api`, and writes a `sha256sum`-compatible digest file (`<digest>  runtime-config.json\n`).
 
 ---
 
@@ -249,7 +249,7 @@ Time:  4ms
 
 ## Step 3: Inspect the Application Server (`server.star`)
 
-Once `config-bootstrap` writes `/work/shared/runtime-config.json` and exits `0`, the Kubelet starts `payment-api`. The container runs [`server.star`](./server.star) via `kite eval` on the same Starkite image:
+Once `config-bootstrap` writes `/etc/payment-api/runtime-config.json` and exits `0`, the Kubelet starts `payment-api`. The container runs [`server.star`](./server.star) via `kite eval` on the same Starkite image:
 
 ```python
 #!/usr/bin/env kite
@@ -311,13 +311,13 @@ def main():
         args=[
             fs.read_text(script_path),
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
-            "--sandbox-path-write=/work/shared",
+            "--sandbox-path-write=/etc/payment-api",
             "--sandbox-net-allow",
             "--env=KUBERNETES_SERVICE_HOST",
             "--env=KUBERNETES_SERVICE_PORT",
         ],
         volume_mounts=[
-            k8s.obj.volume_mount(name="shared-config", mount_path="/work/shared"),
+            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/payment-api"),
         ],
     )
 

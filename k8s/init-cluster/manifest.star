@@ -38,13 +38,13 @@ def main():
         args=[
             fs.read_text(script_path),
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
-            "--sandbox-path-write=/work/shared",
+            "--sandbox-path-write=/etc/payment-api",
             "--sandbox-net-allow",
             "--env=KUBERNETES_SERVICE_HOST",
             "--env=KUBERNETES_SERVICE_PORT",
         ],
         volume_mounts=[
-            k8s.obj.volume_mount(name="shared-config", mount_path="/work/shared"),
+            k8s.obj.volume_mount(name="shared-config", mount_path="/etc/payment-api"),
         ],
     )
 

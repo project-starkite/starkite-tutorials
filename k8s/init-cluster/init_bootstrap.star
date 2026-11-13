@@ -21,7 +21,7 @@ def render_config(ns, data):
 
 def main():
     ns = "init-demo"
-    out = fs.path("/work/shared")
+    out = fs.path("/etc/payment-api")
 
     k = k8s.config(namespace=ns)
     cm = k.get("configmap", "payment-api-settings")
