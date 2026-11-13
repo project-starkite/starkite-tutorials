@@ -1,8 +1,8 @@
 #!/usr/bin/env kite
 
 def main():
-    app = var_str("app", "payment-api")
-    ns = var_str("namespace", "init-demo")
+    app = "payment-api"
+    ns = "init-demo"
 
     k = k8s.config(namespace=ns, timeout="30s")
 

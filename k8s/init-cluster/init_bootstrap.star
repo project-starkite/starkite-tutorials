@@ -20,8 +20,8 @@ def render_config(ns, data):
     }
 
 def main():
-    ns = var_str("namespace", "init-demo")
-    out = fs.path(var_str("out.dir", "/work/shared"))
+    ns = "init-demo"
+    out = fs.path("/work/shared")
 
     k = k8s.config(namespace=ns)
     cm = k.get("configmap", "payment-api-settings")

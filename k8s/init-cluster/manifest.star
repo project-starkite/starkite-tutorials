@@ -1,8 +1,8 @@
 #!/usr/bin/env kite
 
 def main():
-    app = var_str("app", "payment-api")
-    ns = var_str("namespace", "init-demo")
+    app = "payment-api"
+    ns = "init-demo"
     kite_image = "ghcr.io/project-starkite/starkite:v0.11.8"
 
     sa = k8s.obj.service_account(name=app + "-sa", namespace=ns)
@@ -28,8 +28,8 @@ def main():
             "TLS_MODE": "strict",
         },
     )
-    script_path = var_str("script", "./init_bootstrap.star")
-    server_script_path = var_str("server_script", "./server.star")
+    script_path = "./init_bootstrap.star"
+    server_script_path = "./server.star"
 
     init_container = k8s.obj.container(
         name="config-bootstrap",

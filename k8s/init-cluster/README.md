@@ -165,8 +165,8 @@ def render_config(ns, data):
     }
 
 def main():
-    ns = var_str("namespace", "init-demo")
-    out = fs.path(var_str("out.dir", "/work/shared"))
+    ns = "init-demo"
+    out = fs.path("/work/shared")
 
     k = k8s.config(namespace=ns)
     cm = k.get("configmap", "payment-api-settings")
@@ -274,8 +274,8 @@ At startup, `server.star` reads the JSON config and SHA-256 checksum from `/etc/
 #!/usr/bin/env kite
 
 def main():
-    app = var_str("app", "payment-api")
-    ns = var_str("namespace", "init-demo")
+    app = "payment-api"
+    ns = "init-demo"
     kite_image = "ghcr.io/project-starkite/starkite:v0.11.8"
 
     sa = k8s.obj.service_account(name=app + "-sa", namespace=ns)
@@ -301,8 +301,8 @@ def main():
             "TLS_MODE": "strict",
         },
     )
-    script_path = var_str("script", "./init_bootstrap.star")
-    server_script_path = var_str("server_script", "./server.star")
+    script_path = "./init_bootstrap.star"
+    server_script_path = "./server.star"
 
     init_container = k8s.obj.container(
         name="config-bootstrap",
@@ -402,8 +402,8 @@ deployment.apps/payment-api created
 #!/usr/bin/env kite
 
 def main():
-    app = var_str("app", "payment-api")
-    ns = var_str("namespace", "init-demo")
+    app = "payment-api"
+    ns = "init-demo"
 
     k = k8s.config(namespace=ns, timeout="30s")
 
