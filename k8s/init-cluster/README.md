@@ -274,11 +274,11 @@ At startup, `server.star` reads the JSON config and SHA-256 checksum from `/etc/
 ```python
 #!/usr/bin/env kite
 
-def build_stack(
-    app="payment-api",
-    ns="init-demo",
-    kite_image="ghcr.io/project-starkite/starkite:v0.11.8",
-):
+def main():
+    app = var_str("app", "payment-api")
+    ns = var_str("namespace", "init-demo")
+    kite_image = "ghcr.io/project-starkite/starkite:v0.11.8"
+
     sa = k8s.obj.service_account(name=app + "-sa", namespace=ns)
     role_name = app + "-config-reader"
     role = k8s.obj.role(
@@ -358,17 +358,10 @@ def build_stack(
         ],
     )
 
-    return [k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, script_cm, dep]
-
-def main():
-    stack = build_stack(
-        app=var_str("app", "payment-api"),
-        ns=var_str("namespace", "init-demo"),
-    )
-    print(k8s.yaml(stack))
+    print(k8s.yaml([k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, script_cm, dep]))
 ```
 
-When generating [`manifest.yaml`](./manifest.yaml), `k8s.yaml(stack)` serializes multi-line Starlark strings as YAML literal block scalars (`|`) rather than JSON-escaped `\n` strings:
+When generating [`manifest.yaml`](./manifest.yaml), `k8s.yaml(...)` serializes multi-line Starlark strings as YAML literal block scalars (`|`) rather than JSON-escaped `\n` strings:
 
 ```yaml
       containers:
