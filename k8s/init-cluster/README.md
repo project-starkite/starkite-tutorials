@@ -85,7 +85,7 @@ sequenceDiagram
     participant Vol as emptyDir Volume (shared-config)
     participant App as Main Container: payment-api (:8080)
 
-    Kubelet->>Init: kite run /scripts/init_bootstrap.star
+    Kubelet->>Init: kite eval <init_bootstrap.star>
     Note over Init: Enforce zero-trust sandbox (paths, net, env allowlist)
     Init->>API: k.get("configmap", "payment-api-settings")
     API-->>Init: Return ConfigMap data
@@ -99,9 +99,8 @@ sequenceDiagram
 
 ### Zero-Trust Sandbox Confinement
 
-When `kite run` starts inside `config-bootstrap`, Starkite begins under the `deny-all` profile. Filesystem paths, network sockets, subprocess execution, and environment variables stay blocked unless granted via CLI flags:
+When `kite eval` starts inside `config-bootstrap`, Starkite begins under the `deny-all` profile. Filesystem paths, network sockets, subprocess execution, and environment variables stay blocked unless granted via CLI flags:
 
-- `--sandbox-path-read=/scripts`: Reads `init_bootstrap.star` from the read-only `ConfigMap` mount.
 - `--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount`: Lets `k8s.config()` read the Pod's projected ServiceAccount token and cluster `ca.crt`.
 - `--sandbox-path-write=/work/shared`: Restricts writes to the `shared-config` `emptyDir` mount where `runtime-config.json` and `runtime-config.sha256` live.
 - `--sandbox-net-allow`: Permits outbound HTTPS calls to the Kubernetes API server.
@@ -269,7 +268,7 @@ At startup, `server.star` reads the JSON config and SHA-256 checksum from `/etc/
 
 ## Step 4: Generate Manifests and Deploy (`manifest.star` & `manifest.yaml`)
 
-[`manifest.star`](./manifest.star) builds the seven-resource Kubernetes stack (`Namespace`, `ServiceAccount`, `Role`, `RoleBinding`, settings `ConfigMap`, init-script `ConfigMap`, and `Deployment`) with `k8s.obj.*` constructors. It reads [`init_bootstrap.star`](./init_bootstrap.star) and [`server.star`](./server.star) from disk via `fs.read_text()` so your Starlark scripts never get out of sync with the manifests:
+[`manifest.star`](./manifest.star) builds the six-resource Kubernetes stack (`Namespace`, `ServiceAccount`, `Role`, `RoleBinding`, settings `ConfigMap`, and `Deployment`) with `k8s.obj.*` constructors. It reads [`init_bootstrap.star`](./init_bootstrap.star) and [`server.star`](./server.star) from disk via `fs.read_text()` and injects both directly into their containers via `kite eval`, so your Starlark scripts never get out of sync with the manifests:
 
 ```python
 #!/usr/bin/env kite
@@ -303,20 +302,14 @@ def main():
         },
     )
     script_path = var_str("script", "./init_bootstrap.star")
-    script_cm = k8s.obj.config_map(
-        name=app + "-init-script",
-        namespace=ns,
-        data={"init_bootstrap.star": fs.read_text(script_path)},
-    )
     server_script_path = var_str("server_script", "./server.star")
 
     init_container = k8s.obj.container(
         name="config-bootstrap",
         image=kite_image,
+        command=["kite", "eval"],
         args=[
-            "run",
-            "/scripts/init_bootstrap.star",
-            "--sandbox-path-read=/scripts",
+            fs.read_text(script_path),
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
             "--sandbox-path-write=/work/shared",
             "--sandbox-net-allow",
@@ -325,7 +318,6 @@ def main():
         ],
         volume_mounts=[
             k8s.obj.volume_mount(name="shared-config", mount_path="/work/shared"),
-            k8s.obj.volume_mount(name="bootstrap-script", mount_path="/scripts", read_only=True),
         ],
     )
 
@@ -354,11 +346,10 @@ def main():
         containers=[app_container],
         volumes=[
             k8s.obj.volume(name="shared-config", empty_dir=True),
-            k8s.obj.volume(name="bootstrap-script", config_map=script_cm),
         ],
     )
 
-    print(k8s.yaml([k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, script_cm, dep]))
+    print(k8s.yaml([k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, dep]))
 ```
 
 When generating [`manifest.yaml`](./manifest.yaml), `k8s.yaml(...)` serializes multi-line Starlark strings as YAML literal block scalars (`|`) rather than JSON-escaped `\n` strings:
@@ -398,7 +389,6 @@ serviceaccount/payment-api-sa created
 role.rbac.authorization.k8s.io/payment-api-config-reader created
 rolebinding.rbac.authorization.k8s.io/payment-api-config-reader-binding created
 configmap/payment-api-settings created
-configmap/payment-api-init-script created
 deployment.apps/payment-api created
 ```
 

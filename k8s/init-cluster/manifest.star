@@ -29,20 +29,14 @@ def main():
         },
     )
     script_path = var_str("script", "./init_bootstrap.star")
-    script_cm = k8s.obj.config_map(
-        name=app + "-init-script",
-        namespace=ns,
-        data={"init_bootstrap.star": fs.read_text(script_path)},
-    )
     server_script_path = var_str("server_script", "./server.star")
 
     init_container = k8s.obj.container(
         name="config-bootstrap",
         image=kite_image,
+        command=["kite", "eval"],
         args=[
-            "run",
-            "/scripts/init_bootstrap.star",
-            "--sandbox-path-read=/scripts",
+            fs.read_text(script_path),
             "--sandbox-path-read=/var/run/secrets/kubernetes.io/serviceaccount",
             "--sandbox-path-write=/work/shared",
             "--sandbox-net-allow",
@@ -51,7 +45,6 @@ def main():
         ],
         volume_mounts=[
             k8s.obj.volume_mount(name="shared-config", mount_path="/work/shared"),
-            k8s.obj.volume_mount(name="bootstrap-script", mount_path="/scripts", read_only=True),
         ],
     )
 
@@ -80,8 +73,7 @@ def main():
         containers=[app_container],
         volumes=[
             k8s.obj.volume(name="shared-config", empty_dir=True),
-            k8s.obj.volume(name="bootstrap-script", config_map=script_cm),
         ],
     )
 
-    print(k8s.yaml([k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, script_cm, dep]))
+    print(k8s.yaml([k8s.obj.namespace(name=ns), sa, role, rb, settings_cm, dep]))
