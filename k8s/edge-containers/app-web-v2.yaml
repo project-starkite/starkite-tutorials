@@ -1,0 +1,14 @@
+apiVersion: edge.starkite.io/v1alpha1
+kind: ContainerApp
+metadata:
+  name: hello-web
+  namespace: edge-fleet
+  labels:
+    edge.starkite.io/site: site-a
+spec:
+  image: docker.io/library/nginx:1.28-alpine
+  ports:
+    "80/tcp": 18080
+  env:
+    APP_SITE: site-a
+    APP_RELEASE: v2

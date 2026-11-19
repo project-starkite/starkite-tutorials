@@ -1,0 +1,100 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: containerapps.edge.starkite.io
+spec:
+  group: edge.starkite.io
+  names:
+    kind: ContainerApp
+    listKind: ContainerAppList
+    plural: containerapps
+    singular: containerapp
+    shortNames:
+      - capp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Site
+          type: string
+          jsonPath: .status.site
+        - name: Image
+          type: string
+          jsonPath: .spec.image
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Container
+          type: string
+          jsonPath: .status.containerId
+        - name: Port
+          type: string
+          jsonPath: .status.hostPort
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  description: Container image reference (e.g. docker.io/library/nginx:1.27-alpine).
+                command:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional command override passed to the container entrypoint.
+                ports:
+                  type: object
+                  additionalProperties:
+                    type: integer
+                  description: 'Container-to-host port mappings (e.g. {"80/tcp": 18080}).'
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Environment variables injected into the container.
+            status:
+              type: object
+              properties:
+                site:
+                  type: string
+                phase:
+                  type: string
+                containerId:
+                  type: string
+                image:
+                  type: string
+                hostPort:
+                  type: string
+                message:
+                  type: string
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer

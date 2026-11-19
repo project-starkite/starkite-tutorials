@@ -88,6 +88,7 @@ Tutorials covering the 3-tier architecture of Starkite's `k8s` module, from reso
 * [`k3s-bootstrap/`](k8s/k3s-bootstrap/): Multi-node k3s cluster provisioning via SSH jump host orchestration.
 * [`init-cluster/`](k8s/init-cluster/): Sandboxed Kubernetes init containers with unit testing, Starlark manifest generation, and zero-trust runtime confinement.
 * [`init-cluster-lock/`](k8s/init-cluster-lock/): Distributed database migrations across multi-replica init containers coordinated via Kubernetes `Lease` locking and PostgreSQL transactions.
+* [`edge-containers/`](k8s/edge-containers/): Hub-and-spoke edge container orchestration—reconciling `ContainerApp` custom resources from a central Kubernetes control plane onto lightweight Podman/Docker edge hosts with site-label targeting, drift self-healing, upgrades, finalizer teardown, and OS-sandboxed agents.
 
 ### 2. Model Context Protocol (`mcp/`)
 
@@ -134,7 +135,6 @@ Comprehensive 10-part tutorial suite demonstrating OS-level kernel isolation, ca
 * [`08-container-drivers/`](sandbox/08-container-drivers/README.md): Ephemeral hardened OCI containers (`podman`, `docker`, `nerdctl`, `gvisor`).
 * [`09-module-trust-boundaries/`](sandbox/09-module-trust-boundaries/README.md): Declarative `mod.yaml` manifests and the Non-Escalation Principle.
 * [`10-agentic-ai-eval/`](sandbox/10-agentic-ai-eval/README.md): Sandboxed evaluation of untrusted AI-generated code and Model Context Protocol (MCP) tool loops.
-
 
 ---
 
